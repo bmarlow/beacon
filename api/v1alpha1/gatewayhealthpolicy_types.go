@@ -77,56 +77,19 @@ type GatewayHealthPolicySpec struct {
 	Paused bool `json:"paused,omitempty"`
 }
 
-// MetalLBConfig describes how Beacon manipulates MetalLB advertisements.
+// MetalLBConfig describes how Beacon locates MetalLB.
+//
+// Beacon does not create or modify MetalLB CRs. It only reads IPAddressPools
+// (to determine which Gateway VIPs are sourced from MetalLB) and withdraws a
+// VIP by draining the Gateway's proxy Deployment, which causes MetalLB to
+// natively withdraw the route.
 type MetalLBConfig struct {
-	// Namespace is the namespace in which MetalLB CRs (IPAddressPool,
-	// BGPAdvertisement) live.
+	// Namespace is the namespace in which MetalLB CRs (IPAddressPool) live.
 	//
 	// +kubebuilder:default="metallb-system"
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
-
-	// WithdrawalStrategy selects how an individual IP is withdrawn without
-	// disrupting the BGP session.
-	//
-	//   - "ServiceLabel": Beacon toggles a label on the backing LoadBalancer
-	//     Service. A managed BGPAdvertisement selects Services via
-	//     spec.serviceSelectors; removing the label withdraws only that /32
-	//     route while the BGP session stays established. (default)
-	//   - "DedicatedPool": Beacon moves the affected IP into a dedicated
-	//     IPAddressPool and toggles a BGPAdvertisement that references it.
-	//
-	// +kubebuilder:validation:Enum=ServiceLabel;DedicatedPool
-	// +kubebuilder:default=ServiceLabel
-	// +optional
-	WithdrawalStrategy WithdrawalStrategy `json:"withdrawalStrategy,omitempty"`
-
-	// AdvertisementLabelKey is the label key toggled on managed Services when
-	// using the ServiceLabel strategy. It must match the serviceSelectors of
-	// the BGPAdvertisement that Beacon manages.
-	//
-	// +kubebuilder:default="beacon.io/advertise"
-	// +optional
-	AdvertisementLabelKey string `json:"advertisementLabelKey,omitempty"`
-
-	// ManagedBGPAdvertisementName is the name of the BGPAdvertisement that
-	// Beacon reconciles to reflect current advertisement decisions.
-	//
-	// +kubebuilder:default="beacon-managed"
-	// +optional
-	ManagedBGPAdvertisementName string `json:"managedBGPAdvertisementName,omitempty"`
 }
-
-// WithdrawalStrategy enumerates supported MetalLB withdrawal mechanisms.
-// +kubebuilder:validation:Enum=ServiceLabel;DedicatedPool
-type WithdrawalStrategy string
-
-const (
-	// WithdrawalStrategyServiceLabel toggles a label on the backing Service.
-	WithdrawalStrategyServiceLabel WithdrawalStrategy = "ServiceLabel"
-	// WithdrawalStrategyDedicatedPool uses a dedicated IPAddressPool per IP.
-	WithdrawalStrategyDedicatedPool WithdrawalStrategy = "DedicatedPool"
-)
 
 // GatewayReference identifies a Gateway by namespace and name.
 type GatewayReference struct {

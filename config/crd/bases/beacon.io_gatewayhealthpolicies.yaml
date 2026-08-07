@@ -82,23 +82,14 @@ spec:
                     this list. Empty means all classes.
                 metallb:
                   type: object
-                  description: How Beacon interacts with MetalLB.
+                  description: |-
+                    How Beacon locates MetalLB. Beacon reads IPAddressPools to
+                    attribute Gateway VIPs to MetalLB; it does not modify MetalLB
+                    CRs.
                   properties:
                     namespace:
                       type: string
                       default: "metallb-system"
-                    withdrawalStrategy:
-                      type: string
-                      default: "ServiceLabel"
-                      enum:
-                        - ServiceLabel
-                        - DedicatedPool
-                    advertisementLabelKey:
-                      type: string
-                      default: "beacon.io/advertise"
-                    managedBGPAdvertisementName:
-                      type: string
-                      default: "beacon-managed"
                 exemptions:
                   type: array
                   description: Gateways excluded from health checking.

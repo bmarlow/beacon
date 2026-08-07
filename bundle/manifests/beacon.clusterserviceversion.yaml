@@ -28,10 +28,7 @@ metadata:
             "resyncInterval": "10s",
             "paused": false,
             "metallb": {
-              "namespace": "metallb-system",
-              "withdrawalStrategy": "ServiceLabel",
-              "advertisementLabelKey": "beacon.io/advertise",
-              "managedBGPAdvertisementName": "beacon-managed"
+              "namespace": "metallb-system"
             }
           }
         }

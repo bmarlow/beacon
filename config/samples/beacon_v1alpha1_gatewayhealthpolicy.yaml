@@ -16,10 +16,9 @@ spec:
   paused: false
 
   metallb:
+    # Namespace whose IPAddressPools are read to attribute Gateway VIPs to
+    # MetalLB. Beacon does not modify MetalLB CRs.
     namespace: metallb-system
-    withdrawalStrategy: ServiceLabel
-    advertisementLabelKey: beacon.io/advertise
-    managedBGPAdvertisementName: beacon-managed
 
   # Only manage Gateways using these classes. Omit to manage all classes.
   # gatewayClassNames:
