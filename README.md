@@ -208,8 +208,10 @@ withdraw, slow to restore) favors traffic correctness while damping oscillation.
 - OpenShift 4.14+ (or Kubernetes 1.27+).
 - [Gateway API](https://gateway-api.sigs.k8s.io/) CRDs installed, with at least
   one Gateway implementation provisioning `LoadBalancer` Services.
-- [MetalLB](https://metallb.io/) installed in **BGP mode** (the MetalLB Operator
-  on OpenShift), with `IPAddressPool` and `BGPPeer` configured.
+- [MetalLB](https://metallb.io/) installed in **L3 / BGP mode** (the MetalLB
+  Operator on OpenShift), with `IPAddressPool` and `BGPPeer` configured. Beacon
+  supports **BGP mode only** — L2 (ARP/NDP) mode is out of scope (see
+  [FAQ](#faq--troubleshooting)).
 
 ---
 
@@ -639,9 +641,13 @@ continuously healthy for that duration, the route is restored.
 Set `withdrawAfter: 0s` (globally) or the `beacon.io/withdraw-after: "0s"`
 annotation on a specific Gateway. A tiny non-zero value is generally safer.
 
-**Does it work with L2 (ARP) mode?**
-The current release targets BGP mode. L2 advertisement handling is a planned
-enhancement.
+**Does it work with L2 (ARP/NDP) mode?**
+No. Beacon is built specifically for MetalLB in **L3 / BGP mode** and manages BGP
+route advertisement only. **L2 mode is explicitly out of scope and there are no
+plans to support it.** The operator's design goals — withdrawing an individual
+route without disturbing an upstream BGP adjacency, and reasoning about per-VIP
+`/32` advertisements — are BGP concepts that do not map onto MetalLB's L2
+announcement model, so running Beacon against an L2-mode MetalLB is unsupported.
 
 ---
 
