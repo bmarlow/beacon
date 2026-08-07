@@ -1,0 +1,13 @@
+# Adds namespace to all resources.
+namespace: beacon-system
+
+# Value of this field is prepended to the names of all resources, e.g. a
+# deployment named "beacon-controller-manager" becomes "beacon-controller-manager".
+namePrefix: ""
+
+resources:
+  - ../crd
+  - ../rbac
+  - ../manager
+  - ../dashboard
+  - ../samples

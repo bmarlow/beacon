@@ -1,0 +1,158 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package topology assembles a hierarchical, status-annotated view of the
+// MetalLB -> Gateway API -> workload relationships that Beacon manages, for
+// display in the operator's web UI.
+//
+// Hierarchy (root to leaf):
+//
+//	IPAddressPool (MetalLB)
+//	  └─ IP / VIP
+//	       └─ Gateway (gateway.networking.k8s.io)
+//	            └─ Route (HTTP/GRPC/TCP/TLS)
+//	                 └─ backend Service
+//	                      └─ Pod (with probe health)
+package topology
+
+import "time"
+
+// Status is a normalized status enum shared across all node kinds so the UI can
+// render consistent colors.
+type Status string
+
+const (
+	// StatusHealthy: everything below/at this node is nominal.
+	StatusHealthy Status = "Healthy"
+	// StatusDegraded: partially unhealthy (some children failing).
+	StatusDegraded Status = "Degraded"
+	// StatusUnhealthy: failing.
+	StatusUnhealthy Status = "Unhealthy"
+	// StatusWithdrawn: MetalLB advertisement withdrawn by Beacon.
+	StatusWithdrawn Status = "Withdrawn"
+	// StatusPending: a dampening timer is running (withdraw/re-advertise).
+	StatusPending Status = "Pending"
+	// StatusExempt: excluded from health checking (annotation/config/no probes).
+	StatusExempt Status = "Exempt"
+	// StatusUnknown: state could not be determined.
+	StatusUnknown Status = "Unknown"
+)
+
+// Graph is the top-level payload returned to the UI.
+type Graph struct {
+	// GeneratedAt is when this snapshot was assembled.
+	GeneratedAt time.Time `json:"generatedAt"`
+
+	// MetalLBNamespace is the namespace the pools were read from.
+	MetalLBNamespace string `json:"metallbNamespace"`
+
+	// Pools are the MetalLB IP address pools that back one or more Gateways.
+	Pools []PoolNode `json:"pools"`
+
+	// UnpooledGateways are managed Gateways whose IPs are not sourced from any
+	// MetalLB pool (observed but not advertisement-managed by Beacon).
+	UnpooledGateways []GatewayNode `json:"unpooledGateways,omitempty"`
+
+	// Summary holds aggregate counters for the header.
+	Summary Summary `json:"summary"`
+}
+
+// Summary holds aggregate counts for the UI header/badges.
+type Summary struct {
+	Pools            int `json:"pools"`
+	Gateways         int `json:"gateways"`
+	Routes           int `json:"routes"`
+	Services         int `json:"services"`
+	Pods             int `json:"pods"`
+	AdvertisedIPs    int `json:"advertisedIPs"`
+	WithdrawnIPs     int `json:"withdrawnIPs"`
+	UnhealthyGateway int `json:"unhealthyGateways"`
+}
+
+// PoolNode is a MetalLB IPAddressPool and the VIPs allocated from it.
+type PoolNode struct {
+	Name       string   `json:"name"`
+	Namespace  string   `json:"namespace"`
+	Addresses  []string `json:"addresses"`
+	AutoAssign *bool    `json:"autoAssign,omitempty"`
+	Status     Status   `json:"status"`
+	IPs        []IPNode `json:"ips"`
+}
+
+// IPNode is a single VIP and the Gateway that owns it.
+type IPNode struct {
+	IP            string        `json:"ip"`
+	Advertisement string        `json:"advertisement"` // Advertised/Withdrawn/Pending*
+	Status        Status        `json:"status"`
+	Gateways      []GatewayNode `json:"gateways"`
+}
+
+// GatewayNode is a Gateway API Gateway.
+type GatewayNode struct {
+	Name          string      `json:"name"`
+	Namespace     string      `json:"namespace"`
+	ClassName     string      `json:"className"`
+	IPs           []string    `json:"ips"`
+	FromMetalLB   bool        `json:"fromMetalLB"`
+	Exempt        bool        `json:"exempt"`
+	Managed       bool        `json:"managed"`
+	Health        Status      `json:"health"`
+	Advertisement string      `json:"advertisement"`
+	Message       string      `json:"message,omitempty"`
+	ProxyService  *ServiceRef `json:"proxyService,omitempty"`
+	Routes        []RouteNode `json:"routes"`
+	Status        Status      `json:"status"`
+}
+
+// RouteNode is an xRoute attached to the Gateway.
+type RouteNode struct {
+	Kind      string        `json:"kind"` // HTTPRoute/GRPCRoute/TCPRoute/TLSRoute
+	Name      string        `json:"name"`
+	Namespace string        `json:"namespace"`
+	Hostnames []string      `json:"hostnames,omitempty"`
+	Status    Status        `json:"status"`
+	Services  []ServiceNode `json:"services"`
+}
+
+// ServiceRef is a lightweight reference (used for the proxy Service).
+type ServiceRef struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Type      string `json:"type"`
+}
+
+// ServiceNode is a backend Service referenced by a route.
+type ServiceNode struct {
+	Name      string    `json:"name"`
+	Namespace string    `json:"namespace"`
+	Type      string    `json:"type"`
+	Port      string    `json:"port,omitempty"`
+	Status    Status    `json:"status"`
+	Pods      []PodNode `json:"pods"`
+}
+
+// PodNode is a backend workload Pod with its probe-derived health.
+type PodNode struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Node      string `json:"node,omitempty"`
+	Phase     string `json:"phase"`
+	// Probed indicates the pod declares at least one health probe.
+	Probed bool   `json:"probed"`
+	Ready  bool   `json:"ready"`
+	Status Status `json:"status"`
+	Reason string `json:"reason,omitempty"`
+}

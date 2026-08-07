@@ -1,0 +1,33 @@
+---
+apiVersion: beacon.io/v1alpha1
+kind: GatewayHealthPolicy
+metadata:
+  # The operator loads a singleton policy named "cluster" by default
+  # (configurable via the --policy-name flag).
+  name: cluster
+spec:
+  # Wait 5s of continuous unhealthiness before withdrawing a route.
+  withdrawAfter: 5s
+  # Wait 30s of continuous health before restoring a route.
+  readvertiseAfter: 30s
+  # Worst-case reconcile cadence when no watch event fires.
+  resyncInterval: 10s
+  # Set true to observe-only (no MetalLB mutations); useful for maintenance.
+  paused: false
+
+  metallb:
+    namespace: metallb-system
+    withdrawalStrategy: ServiceLabel
+    advertisementLabelKey: beacon.io/advertise
+    managedBGPAdvertisementName: beacon-managed
+
+  # Only manage Gateways using these classes. Omit to manage all classes.
+  # gatewayClassNames:
+  #   - istio
+  #   - openshift-default
+
+  # Gateways to exclude from health checking (in addition to any carrying the
+  # annotation  beacon.io/exempt: "true").
+  exemptions:
+    - namespace: infra
+      name: management-gateway

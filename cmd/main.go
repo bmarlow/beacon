@@ -1,0 +1,144 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package main
+
+import (
+	"crypto/tls"
+	"flag"
+	"os"
+
+	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+
+	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	"github.com/bmarlow/beacon/internal/controller"
+	"github.com/bmarlow/beacon/internal/metallb"
+	"github.com/bmarlow/beacon/internal/state"
+	"github.com/bmarlow/beacon/internal/webui"
+	// +kubebuilder:scaffold:imports
+)
+
+var setupLog = ctrl.Log.WithName("setup")
+
+func main() {
+	runtimeScheme := clientgoscheme.Scheme
+	utilruntime.Must(clientgoscheme.AddToScheme(runtimeScheme))
+	utilruntime.Must(beaconv1alpha1.AddToScheme(runtimeScheme))
+	utilruntime.Must(gwapiv1.Install(runtimeScheme))
+	utilruntime.Must(gwapiv1alpha2.Install(runtimeScheme))
+	utilruntime.Must(metallb.AddToScheme(runtimeScheme))
+	utilruntime.Must(corev1.AddToScheme(runtimeScheme))
+	utilruntime.Must(discoveryv1.AddToScheme(runtimeScheme))
+	// +kubebuilder:scaffold:scheme
+
+	var metricsAddr string
+	var enableLeaderElection bool
+	var probeAddr string
+	var secureMetrics bool
+	var policyName string
+	var dashboardAddr string
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
+	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
+	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
+		"Enable leader election for controller manager. "+
+			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&secureMetrics, "metrics-secure", true,
+		"If set, the metrics endpoint is served securely via HTTPS.")
+	flag.StringVar(&policyName, "policy-name", "cluster",
+		"Name of the singleton GatewayHealthPolicy resource to load configuration from.")
+	flag.StringVar(&dashboardAddr, "dashboard-bind-address", ":8082",
+		"The address the topology dashboard (web UI) binds to. Set empty to disable.")
+	opts := zap.Options{Development: false}
+	opts.BindFlags(flag.CommandLine)
+	flag.Parse()
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Disable HTTP/2 by default to mitigate Rapid Reset / HPACK CVEs, per
+	// Red Hat operator hardening guidance.
+	disableHTTP2 := func(c *tls.Config) {
+		setupLog.Info("disabling http/2")
+		c.NextProtos = []string{"http/1.1"}
+	}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+		Scheme: runtimeScheme,
+		Metrics: metricsserver.Options{
+			BindAddress:   metricsAddr,
+			SecureServing: secureMetrics,
+			TLSOpts:       []func(*tls.Config){disableHTTP2},
+		},
+		WebhookServer: webhook.NewServer(webhook.Options{
+			TLSOpts: []func(*tls.Config){disableHTTP2},
+		}),
+		HealthProbeBindAddress: probeAddr,
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "beacon.beacon.io",
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to start manager")
+		os.Exit(1)
+	}
+
+	// Shared state store: the controller publishes live advertisement/health
+	// decisions; the web UI reads them to annotate the topology graph.
+	stateStore := state.New()
+
+	if err := (&controller.GatewayReconciler{
+		Client:     mgr.GetClient(),
+		Recorder:   mgr.GetEventRecorderFor("beacon"),
+		PolicyName: policyName,
+		States:     stateStore,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Gateway")
+		os.Exit(1)
+	}
+	// +kubebuilder:scaffold:builder
+
+	// Topology dashboard (read-only web UI). Runs on every replica.
+	if dashboardAddr != "" {
+		dash := webui.NewServer(dashboardAddr, mgr.GetClient(), stateStore, policyName)
+		if err := dash.AddToManager(mgr); err != nil {
+			setupLog.Error(err, "unable to register topology dashboard")
+			os.Exit(1)
+		}
+	}
+
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up health check")
+		os.Exit(1)
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Error(err, "unable to set up ready check")
+		os.Exit(1)
+	}
+
+	setupLog.Info("starting manager")
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+		setupLog.Error(err, "problem running manager")
+		os.Exit(1)
+	}
+}

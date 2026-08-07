@@ -1,0 +1,249 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  name: beacon.v0.1.0
+  namespace: placeholder
+  annotations:
+    capabilities: Seamless Upgrades
+    categories: Networking
+    containerImage: quay.io/bmarlow/beacon:latest
+    createdAt: "2026-08-06T00:00:00Z"
+    description: >-
+      Beacon integrates Gateway API Gateway health with MetalLB BGP
+      advertisements, withdrawing and restoring individual load-balancer routes
+      based on backing-workload probe health without flapping BGP sessions.
+    repository: https://github.com/bmarlow/beacon
+    support: Community
+    operators.operatorframework.io/builder: operator-sdk-v1.35.0
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "beacon.io/v1alpha1",
+          "kind": "GatewayHealthPolicy",
+          "metadata": { "name": "cluster" },
+          "spec": {
+            "withdrawAfter": "5s",
+            "readvertiseAfter": "30s",
+            "resyncInterval": "10s",
+            "paused": false,
+            "metallb": {
+              "namespace": "metallb-system",
+              "withdrawalStrategy": "ServiceLabel",
+              "advertisementLabelKey": "beacon.io/advertise",
+              "managedBGPAdvertisementName": "beacon-managed"
+            }
+          }
+        }
+      ]
+spec:
+  displayName: Beacon Gateway Health Operator
+  description: |
+    # Beacon
+
+    Beacon is an OpenShift operator that couples **Gateway API** Gateway health
+    to **MetalLB** BGP route advertisements.
+
+    ## What it does
+
+    * Watches all Gateway API `Gateway` resources and infers their
+      load-balancer IPs.
+    * Determines which of those IPs are sourced from a MetalLB
+      `IPAddressPool`.
+    * Traces each Gateway down to its backing `Service`, `EndpointSlice`s, and
+      `Pod`s, and inspects the pods' readiness/liveness/startup probes.
+    * Pods **without** any health probes are exempt and ignored.
+    * When a probed pod is failing, Beacon **withdraws** the associated Gateway
+      IP from MetalLB after a configurable dampening timer.
+    * When the workload becomes healthy again, Beacon **re-advertises** the IP
+      after a configurable dampening timer.
+    * Withdrawals and re-advertisements are performed **without restarting
+      MetalLB or flapping BGP adjacencies** — only the affected /32 route is
+      announced or withdrawn over the existing BGP session.
+
+    ## Configuration
+
+    A cluster-scoped singleton `GatewayHealthPolicy` (named `cluster`) controls
+    timers, MetalLB integration, and exemptions. Gateways may also be exempted
+    individually via the `beacon.io/exempt: "true"` annotation.
+
+    See the project README for full details.
+  keywords:
+    - gateway-api
+    - metallb
+    - bgp
+    - networking
+    - health
+    - load-balancer
+  version: 0.1.0
+  maturity: alpha
+  minKubeVersion: 1.27.0
+  maintainers:
+    - name: Beacon Maintainers
+      email: maintainers@example.com
+  provider:
+    name: Beacon Community
+  links:
+    - name: Source
+      url: https://github.com/bmarlow/beacon
+    - name: Documentation
+      url: https://github.com/bmarlow/beacon/blob/main/README.md
+  icon:
+    - base64data: ""
+      mediatype: image/svg+xml
+  installModes:
+    - type: OwnNamespace
+      supported: true
+    - type: SingleNamespace
+      supported: true
+    - type: MultiNamespace
+      supported: false
+    - type: AllNamespaces
+      supported: true
+  customresourcedefinitions:
+    owned:
+      - name: gatewayhealthpolicies.beacon.io
+        version: v1alpha1
+        kind: GatewayHealthPolicy
+        displayName: Gateway Health Policy
+        description: >-
+          Cluster-scoped singleton configuring Beacon's timers, MetalLB
+          integration, and Gateway exemptions.
+        resources:
+          - kind: Gateway
+            version: gateway.networking.k8s.io/v1
+          - kind: Service
+            version: v1
+          - kind: Pod
+            version: v1
+        specDescriptors:
+          - path: withdrawAfter
+            displayName: Withdraw After
+            description: Continuous unhealthy duration before withdrawing a route.
+          - path: readvertiseAfter
+            displayName: Re-advertise After
+            description: Continuous healthy duration before restoring a route.
+          - path: paused
+            displayName: Paused
+            description: Observe-only mode; no MetalLB mutations.
+            x-descriptors:
+              - urn:alm:descriptor:com.tectonic.ui:booleanSwitch
+        statusDescriptors:
+          - path: managedGateways
+            displayName: Managed Gateways
+          - path: advertisedIPs
+            displayName: Advertised IPs
+          - path: withdrawnIPs
+            displayName: Withdrawn IPs
+  install:
+    strategy: deployment
+    spec:
+      clusterPermissions:
+        - serviceAccountName: beacon-controller-manager
+          rules:
+            - apiGroups: ["beacon.io"]
+              resources: ["gatewayhealthpolicies"]
+              verbs: ["get", "list", "watch", "update"]
+            - apiGroups: ["beacon.io"]
+              resources: ["gatewayhealthpolicies/status"]
+              verbs: ["get", "update", "patch"]
+            - apiGroups: ["gateway.networking.k8s.io"]
+              resources: ["gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "tlsroutes"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["gateway.networking.k8s.io"]
+              resources: ["gateways/status"]
+              verbs: ["get"]
+            - apiGroups: [""]
+              resources: ["services"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["pods", "endpoints"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["discovery.k8s.io"]
+              resources: ["endpointslices"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments"]
+              verbs: ["get", "list", "watch", "update", "patch"]
+            - apiGroups: ["apps"]
+              resources: ["deployments/scale"]
+              verbs: ["get", "update", "patch"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["create", "patch"]
+            - apiGroups: ["metallb.io"]
+              resources: ["ipaddresspools"]
+              verbs: ["get", "list", "watch"]
+      permissions:
+        - serviceAccountName: beacon-controller-manager
+          rules:
+            - apiGroups: [""]
+              resources: ["configmaps"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: ["coordination.k8s.io"]
+              resources: ["leases"]
+              verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+            - apiGroups: [""]
+              resources: ["events"]
+              verbs: ["create", "patch"]
+      deployments:
+        - name: beacon-controller-manager
+          label:
+            control-plane: controller-manager
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                control-plane: controller-manager
+            template:
+              metadata:
+                labels:
+                  control-plane: controller-manager
+                annotations:
+                  kubectl.kubernetes.io/default-container: manager
+              spec:
+                serviceAccountName: beacon-controller-manager
+                terminationGracePeriodSeconds: 10
+                securityContext:
+                  runAsNonRoot: true
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: manager
+                    image: quay.io/bmarlow/beacon:latest
+                    command: ["/manager"]
+                    args:
+                      - --leader-elect
+                      - --health-probe-bind-address=:8081
+                      - --metrics-bind-address=:8443
+                      - --metrics-secure=true
+                      - --dashboard-bind-address=:8082
+                    ports:
+                      - name: dashboard
+                        containerPort: 8082
+                        protocol: TCP
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      runAsNonRoot: true
+                      capabilities:
+                        drop: ["ALL"]
+                    livenessProbe:
+                      httpGet:
+                        path: /healthz
+                        port: 8081
+                      initialDelaySeconds: 15
+                      periodSeconds: 20
+                    readinessProbe:
+                      httpGet:
+                        path: /readyz
+                        port: 8081
+                      initialDelaySeconds: 5
+                      periodSeconds: 10
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                      limits:
+                        cpu: 500m
+                        memory: 128Mi

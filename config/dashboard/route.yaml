@@ -1,0 +1,26 @@
+---
+# OpenShift Route exposing the Beacon topology dashboard.
+# TLS is terminated at the router (edge) and redirects HTTP -> HTTPS.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: beacon-dashboard
+  namespace: beacon-system
+  labels:
+    app.kubernetes.io/name: beacon
+    app.kubernetes.io/component: dashboard
+  annotations:
+    # The dashboard is read-only, but you should still protect it. Consider
+    # placing it behind the OpenShift OAuth proxy or an AuthorizationPolicy.
+    haproxy.router.openshift.io/timeout: 30s
+spec:
+  to:
+    kind: Service
+    name: beacon-dashboard
+    weight: 100
+  port:
+    targetPort: dashboard
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

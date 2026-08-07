@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beacon &mdash; Gateway / MetalLB Topology</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">&#9678;</span>
+      <div>
+        <h1>Beacon</h1>
+        <p class="tagline">MetalLB &rarr; Gateway API &rarr; Workload topology</p>
+      </div>
+    </div>
+    <div class="summary" id="summary"></div>
+    <div class="controls">
+      <label class="auto">
+        <input type="checkbox" id="autoRefresh" checked /> Auto-refresh
+      </label>
+      <button id="refreshBtn" title="Refresh now">&#8635; Refresh</button>
+      <button id="expandBtn" title="Expand all">Expand all</button>
+      <button id="collapseBtn" title="Collapse all">Collapse all</button>
+      <span id="updated" class="updated"></span>
+    </div>
+  </header>
+
+  <div class="legend" id="legend">
+    <span class="chip s-Healthy">Healthy</span>
+    <span class="chip s-Degraded">Degraded</span>
+    <span class="chip s-Unhealthy">Unhealthy</span>
+    <span class="chip s-Withdrawn">Withdrawn</span>
+    <span class="chip s-Pending">Pending</span>
+    <span class="chip s-Exempt">Exempt</span>
+    <span class="chip s-Unknown">Unknown</span>
+  </div>
+
+  <main id="tree" class="tree">
+    <div class="loading">Loading topology&hellip;</div>
+  </main>
+
+  <footer class="footer">
+    <span id="err" class="err"></span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>

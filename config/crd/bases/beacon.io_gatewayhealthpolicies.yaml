@@ -1,0 +1,202 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+  name: gatewayhealthpolicies.beacon.io
+spec:
+  group: beacon.io
+  names:
+    kind: GatewayHealthPolicy
+    listKind: GatewayHealthPolicyList
+    plural: gatewayhealthpolicies
+    shortNames:
+      - ghp
+    singular: gatewayhealthpolicy
+  scope: Cluster
+  versions:
+    - name: v1alpha1
+      additionalPrinterColumns:
+        - jsonPath: .status.managedGateways
+          name: Managed
+          type: integer
+        - jsonPath: .status.advertisedIPs
+          name: Advertised
+          type: integer
+        - jsonPath: .status.withdrawnIPs
+          name: Withdrawn
+          type: integer
+        - jsonPath: .spec.paused
+          name: Paused
+          type: boolean
+        - jsonPath: .metadata.creationTimestamp
+          name: Age
+          type: date
+      schema:
+        openAPIV3Schema:
+          description: |-
+            GatewayHealthPolicy is the Schema for the gatewayhealthpolicies API.
+            It is a cluster-scoped singleton (conventionally named "cluster") that
+            configures Beacon's reconciliation behavior.
+          type: object
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: GatewayHealthPolicySpec defines the desired state.
+              properties:
+                withdrawAfter:
+                  type: string
+                  default: "5s"
+                  description: |-
+                    Duration a Gateway's backing workload must be continuously
+                    unhealthy before its IP advertisement is withdrawn from
+                    MetalLB. Dampening timer to avoid flapping.
+                readvertiseAfter:
+                  type: string
+                  default: "30s"
+                  description: |-
+                    Duration a Gateway's backing workload must be continuously
+                    healthy again before its advertisement is restored.
+                resyncInterval:
+                  type: string
+                  default: "10s"
+                  description: Maximum period between full reconciliations.
+                paused:
+                  type: boolean
+                  default: false
+                  description: |-
+                    When true, disables all withdrawal/re-advertisement actions.
+                gatewayClassNames:
+                  type: array
+                  items:
+                    type: string
+                  description: |-
+                    Restricts Beacon to Gateways whose gatewayClassName is in
+                    this list. Empty means all classes.
+                metallb:
+                  type: object
+                  description: How Beacon interacts with MetalLB.
+                  properties:
+                    namespace:
+                      type: string
+                      default: "metallb-system"
+                    withdrawalStrategy:
+                      type: string
+                      default: "ServiceLabel"
+                      enum:
+                        - ServiceLabel
+                        - DedicatedPool
+                    advertisementLabelKey:
+                      type: string
+                      default: "beacon.io/advertise"
+                    managedBGPAdvertisementName:
+                      type: string
+                      default: "beacon-managed"
+                exemptions:
+                  type: array
+                  description: Gateways excluded from health checking.
+                  items:
+                    type: object
+                    required:
+                      - namespace
+                      - name
+                    properties:
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+            status:
+              type: object
+              description: GatewayHealthPolicyStatus defines the observed state.
+              properties:
+                observedGeneration:
+                  type: integer
+                  format: int64
+                managedGateways:
+                  type: integer
+                  format: int32
+                advertisedIPs:
+                  type: integer
+                  format: int32
+                withdrawnIPs:
+                  type: integer
+                  format: int32
+                gateways:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - namespace
+                    - name
+                  items:
+                    type: object
+                    required:
+                      - namespace
+                      - name
+                    properties:
+                      namespace:
+                        type: string
+                      name:
+                        type: string
+                      ips:
+                        type: array
+                        items:
+                          type: string
+                      fromMetalLB:
+                        type: boolean
+                      health:
+                        type: string
+                      advertisement:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                conditions:
+                  type: array
+                  x-kubernetes-list-type: map
+                  x-kubernetes-list-map-keys:
+                    - type
+                  items:
+                    type: object
+                    required:
+                      - lastTransitionTime
+                      - message
+                      - reason
+                      - status
+                      - type
+                    properties:
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      message:
+                        type: string
+                        maxLength: 32768
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        minimum: 0
+                      reason:
+                        type: string
+                        maxLength: 1024
+                        minLength: 1
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                      type:
+                        type: string
+                        maxLength: 316
+      served: true
+      storage: true
+      subresources:
+        status: {}

@@ -1,0 +1,17 @@
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: beacon-dashboard
+  namespace: beacon-system
+  labels:
+    app.kubernetes.io/name: beacon
+    app.kubernetes.io/component: dashboard
+spec:
+  selector:
+    control-plane: controller-manager
+  ports:
+    - name: dashboard
+      port: 8082
+      targetPort: dashboard
+      protocol: TCP

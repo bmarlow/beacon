@@ -1,0 +1,19 @@
+# Packaging Dockerfile that uses a pre-built (cross-compiled) manager binary.
+# Build the binary on the host with:
+#   CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -ldflags="-s -w" \
+#       -o manager-amd64 ./cmd/main.go
+# then:
+#   podman build --platform linux/amd64 -f Dockerfile.prebuilt -t <img> .
+#
+# This avoids emulating the Go toolchain under QEMU/libkrun on Apple Silicon.
+FROM registry.access.redhat.com/ubi9/ubi-micro:latest
+WORKDIR /
+COPY manager-amd64 /manager
+USER 65532:65532
+
+LABEL org.opencontainers.image.title="beacon" \
+      org.opencontainers.image.description="OpenShift operator integrating Gateway API health with MetalLB BGP advertisements" \
+      org.opencontainers.image.source="https://github.com/bmarlow/beacon" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+ENTRYPOINT ["/manager"]
