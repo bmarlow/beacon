@@ -86,7 +86,7 @@ func (m *ResourceManager) Start(ctx context.Context) error {
 	}
 
 	if m.routeInstalled() {
-		if err := m.ensureRoute(ctx, ns, owner); err != nil {
+		if err := m.ensureRoute(ctx, ns); err != nil {
 			logger.Error(err, "failed ensuring dashboard Route")
 		} else {
 			logger.Info("ensured dashboard Route", "namespace", ns, "name", dashboardName)
@@ -186,7 +186,7 @@ func (m *ResourceManager) routeInstalled() bool {
 	return err == nil && len(mappings) > 0
 }
 
-func (m *ResourceManager) ensureRoute(ctx context.Context, ns string, owner *metav1.OwnerReference) error {
+func (m *ResourceManager) ensureRoute(ctx context.Context, ns string) error {
 	route := &unstructured.Unstructured{}
 	route.SetGroupVersionKind(routeGVK)
 	key := types.NamespacedName{Namespace: ns, Name: dashboardName}
@@ -206,9 +206,12 @@ func (m *ResourceManager) ensureRoute(ctx context.Context, ns string, owner *met
 	route.SetNamespace(ns)
 	route.SetLabels(dashboardLabels())
 	route.SetAnnotations(map[string]string{"haproxy.router.openshift.io/timeout": "30s"})
-	if owner != nil {
-		route.SetOwnerReferences([]metav1.OwnerReference{*owner})
-	}
+	// NOTE: We intentionally do NOT set an owner reference on the Route. The
+	// OpenShift route.openshift.io admission (OwnerReferencesPermissionEnforcement)
+	// rejects setting a cross-group ownerRef to the operator's Deployment even
+	// with delete permission on deployments. The Route is idempotently
+	// reconciled on startup; on uninstall it is a harmless orphan (its target
+	// Service is owner-referenced and IS garbage-collected).
 	spec := map[string]interface{}{
 		"to": map[string]interface{}{
 			"kind":   "Service",
