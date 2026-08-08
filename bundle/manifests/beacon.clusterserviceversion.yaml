@@ -6,7 +6,7 @@ metadata:
   annotations:
     capabilities: Seamless Upgrades
     categories: Networking
-    containerImage: ghcr.io/bmarlow/beacon:latest
+    containerImage: ghcr.io/bmarlow/beacon@sha256:878812c360f29ffacf1af30529743eeb80d048ebefa496c44155b3c9156d6d70
     createdAt: "2026-08-06T00:00:00Z"
     description: >-
       Beacon integrates Gateway API Gateway health with MetalLB BGP
@@ -213,7 +213,7 @@ spec:
                     type: RuntimeDefault
                 containers:
                   - name: manager
-                    image: ghcr.io/bmarlow/beacon:latest
+                    image: ghcr.io/bmarlow/beacon@sha256:878812c360f29ffacf1af30529743eeb80d048ebefa496c44155b3c9156d6d70
                     command: ["/manager"]
                     args:
                       - --leader-elect
