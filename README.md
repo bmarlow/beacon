@@ -215,6 +215,28 @@ withdraw, slow to restore) favors traffic correctness while damping oscillation.
 
 ---
 
+## Container images
+
+The operator image is built and published automatically by GitHub Actions
+(`.github/workflows/build-image.yaml`) on **every push to `main`** (and on `v*`
+tags) to **GitHub Container Registry**:
+
+```
+ghcr.io/bmarlow/beacon:latest        # rolling latest from main
+ghcr.io/bmarlow/beacon:sha-<short>   # immutable, per-commit (recommended for rollouts)
+ghcr.io/bmarlow/beacon:X.Y.Z         # published when a vX.Y.Z git tag is pushed
+```
+
+Pull requests build the image (to catch breakage) but do not push. For
+reproducible deployments, pin the `sha-<short>` tag in your kustomize overlay
+rather than `latest`.
+
+> The ghcr.io package must be **public** for the cluster to pull it anonymously
+> (Repository → Packages → beacon → Package settings → Change visibility), or
+> configure an image pull secret referencing a token with `read:packages`.
+
+---
+
 ## Installation
 
 ### Install via OLM (OperatorHub)
@@ -238,9 +260,9 @@ spec:
 To build and push the bundle yourself:
 
 ```bash
-make bundle IMG=quay.io/<you>/beacon:latest VERSION=0.1.0
-make bundle-build bundle-push BUNDLE_IMG=quay.io/<you>/beacon-bundle:0.1.0
-operator-sdk run bundle quay.io/<you>/beacon-bundle:0.1.0
+make bundle IMG=ghcr.io/<you>/beacon:latest VERSION=0.1.0
+make bundle-build bundle-push BUNDLE_IMG=ghcr.io/<you>/beacon-bundle:0.1.0
+operator-sdk run bundle ghcr.io/<you>/beacon-bundle:0.1.0
 ```
 
 ### Install with kustomize
@@ -250,7 +272,7 @@ operator-sdk run bundle quay.io/<you>/beacon-bundle:0.1.0
 make install
 
 # Deploy the controller (namespace beacon-system).
-make deploy IMG=quay.io/<you>/beacon:latest
+make deploy IMG=ghcr.io/<you>/beacon:latest
 
 # Create the singleton policy.
 kubectl apply -f config/samples/beacon_v1alpha1_gatewayhealthpolicy.yaml
@@ -591,7 +613,7 @@ make manifests generate
 
 # Build the binary / image.
 make build
-make docker-build IMG=quay.io/<you>/beacon:dev
+make docker-build IMG=ghcr.io/<you>/beacon:dev
 
 # Lint.
 make lint

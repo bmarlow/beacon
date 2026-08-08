@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
-IMG ?= quay.io/bmarlow/beacon:latest
+IMG ?= ghcr.io/bmarlow/beacon:latest
 # Bundle image
-BUNDLE_IMG ?= quay.io/bmarlow/beacon-bundle:latest
+BUNDLE_IMG ?= ghcr.io/bmarlow/beacon-bundle:latest
 VERSION ?= 0.1.0
 
 # Get the currently used golang install path
@@ -83,7 +83,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the cluster.
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the cluster.
-	cd config/manager && $(KUSTOMIZE) edit set image quay.io/bmarlow/beacon=${IMG}
+	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/bmarlow/beacon=${IMG}
 	$(KUSTOMIZE) build config/default | kubectl apply -f -
 
 .PHONY: undeploy
@@ -95,7 +95,7 @@ undeploy: ## Undeploy controller from the cluster.
 .PHONY: bundle
 bundle: manifests kustomize ## Generate bundle manifests and metadata.
 	operator-sdk generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image quay.io/bmarlow/beacon=${IMG}
+	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/bmarlow/beacon=${IMG}
 	$(KUSTOMIZE) build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
 	operator-sdk bundle validate ./bundle
 

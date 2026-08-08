@@ -3,19 +3,22 @@ FROM registry.access.redhat.com/ubi9/go-toolset:1.22 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+# Run the build stage as root so the module cache and workdir are always
+# writable (avoids permission issues across build environments).
+USER root
 WORKDIR /opt/app-root/src
+
 # Copy the Go Modules manifests and download deps first for better caching.
 COPY go.mod go.mod
 COPY go.sum go.sum
 RUN go mod download
 
-# Copy the go source
-COPY cmd/main.go cmd/main.go
+# Copy the go source.
+COPY cmd/ cmd/
 COPY api/ api/
 COPY internal/ internal/
 
 # Build a static binary. CGO disabled for a minimal, distroless-compatible image.
-USER root
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -a -ldflags="-s -w" -o manager cmd/main.go
 

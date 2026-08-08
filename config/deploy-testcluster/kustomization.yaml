@@ -3,7 +3,10 @@
 #   kubectl apply -k config/deploy-testcluster
 #
 # This reuses the base resources but overrides the namespace to "beacon" and
-# pins the image to the pushed Quay tag.
+# points the image at GitHub Container Registry (ghcr.io), which is built and
+# published automatically by the build-image GitHub Actions workflow on every
+# push to main. For reproducible rollouts, replace newTag with an immutable
+# commit tag published by the workflow, e.g. "sha-<short>".
 namespace: beacon
 
 resources:
@@ -13,9 +16,9 @@ resources:
   - ../dashboard
 
 images:
-  - name: quay.io/bmarlow/beacon
-    newName: quay.io/bmarlow/beacon
-    newTag: "0.1.3"
+  - name: ghcr.io/bmarlow/beacon
+    newName: ghcr.io/bmarlow/beacon
+    newTag: "latest"
 
 # Ensure the Namespace object itself is named "beacon" (the base manager.yaml
 # creates a "beacon-system" Namespace; we patch it to "beacon").
