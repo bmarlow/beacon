@@ -171,6 +171,12 @@ spec:
             - apiGroups: ["metallb.io"]
               resources: ["ipaddresspools"]
               verbs: ["get", "list", "watch"]
+            - apiGroups: ["config.openshift.io"]
+              resources: ["consoles"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: ["route.openshift.io"]
+              resources: ["routes"]
+              verbs: ["get", "list", "watch"]
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:

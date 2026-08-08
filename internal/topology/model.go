@@ -59,6 +59,11 @@ type Graph struct {
 	// OperatorVersion is the Beacon operator build version (git describe / tag).
 	OperatorVersion string `json:"operatorVersion"`
 
+	// ConsoleBaseURL is the OpenShift web console base URL (e.g.
+	// https://console-openshift-console.apps.example.com), used by the UI to
+	// build per-resource console links. Empty when not on OpenShift / unknown.
+	ConsoleBaseURL string `json:"consoleBaseURL,omitempty"`
+
 	// MetalLBNamespace is the namespace the pools were read from.
 	MetalLBNamespace string `json:"metallbNamespace"`
 
@@ -85,6 +90,20 @@ type Summary struct {
 	UnhealthyGateway int `json:"unhealthyGateways"`
 }
 
+// Ref identifies the Kubernetes object behind a node so the UI can build an
+// OpenShift console link. For core resources Group is "" and the console uses
+// the plural (e.g. "pods"); for CRD-backed resources the console uses the
+// group~version~Kind form.
+type Ref struct {
+	Group         string `json:"group,omitempty"`
+	Version       string `json:"version,omitempty"`
+	Kind          string `json:"kind,omitempty"`
+	Plural        string `json:"plural,omitempty"`
+	Namespace     string `json:"namespace,omitempty"`
+	Name          string `json:"name,omitempty"`
+	ClusterScoped bool   `json:"clusterScoped,omitempty"`
+}
+
 // StatusTiming records how long a component has been in its current status.
 // Embedded into each node so the UI can render "for 3m12s".
 type StatusTiming struct {
@@ -104,6 +123,7 @@ type PoolNode struct {
 	AutoAssign   *bool    `json:"autoAssign,omitempty"`
 	Status       Status   `json:"status"`
 	StatusTiming `json:",inline"`
+	Ref          *Ref     `json:"ref,omitempty"`
 	IPs          []IPNode `json:"ips"`
 }
 
@@ -138,6 +158,7 @@ type GatewayNode struct {
 	Routes          []RouteNode `json:"routes"`
 	Status          Status      `json:"status"`
 	StatusTiming    `json:",inline"`
+	Ref             *Ref `json:"ref,omitempty"`
 	// Timer describes a running dampening timer (backoff/recovery), if any.
 	Timer *Timer `json:"timer,omitempty"`
 }
@@ -163,6 +184,7 @@ type RouteNode struct {
 	Hostnames    []string `json:"hostnames,omitempty"`
 	Status       Status   `json:"status"`
 	StatusTiming `json:",inline"`
+	Ref          *Ref          `json:"ref,omitempty"`
 	Services     []ServiceNode `json:"services"`
 }
 
@@ -181,6 +203,7 @@ type ServiceNode struct {
 	Port         string `json:"port,omitempty"`
 	Status       Status `json:"status"`
 	StatusTiming `json:",inline"`
+	Ref          *Ref      `json:"ref,omitempty"`
 	Pods         []PodNode `json:"pods"`
 }
 
@@ -195,5 +218,6 @@ type PodNode struct {
 	Ready        bool   `json:"ready"`
 	Status       Status `json:"status"`
 	StatusTiming `json:",inline"`
+	Ref          *Ref   `json:"ref,omitempty"`
 	Reason       string `json:"reason,omitempty"`
 }

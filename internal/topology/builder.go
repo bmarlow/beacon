@@ -28,7 +28,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -64,6 +66,7 @@ type routeInfo struct {
 // Build produces a full topology Graph.
 func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 	g := &Graph{GeneratedAt: time.Now(), OperatorVersion: version.Get()}
+	g.ConsoleBaseURL = b.consoleBaseURL(ctx)
 
 	// Load policy (config + status). Status is shared across all replicas, so
 	// using it for advertisement/timer keeps the dashboard consistent
@@ -120,6 +123,7 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 			Namespace:  p.Namespace,
 			Addresses:  append([]string(nil), p.Spec.Addresses...),
 			AutoAssign: p.Spec.AutoAssign,
+			Ref:        poolRef(p.Namespace, p.Name),
 		}
 		poolNodesByName[p.Name] = pn
 		poolOrder = append(poolOrder, p.Name)
@@ -205,6 +209,7 @@ func (b *Builder) buildGatewayNode(
 		Exempt:    policy.IsExempt(gw, spec),
 		Managed:   policy.Managed(gw, spec),
 		IPs:       extractGatewayIPs(gw),
+		Ref:       gatewayRef(gw.Namespace, gw.Name),
 	}
 
 	// Proxy service (for VIP display).
@@ -279,13 +284,17 @@ func (b *Builder) buildGatewayNode(
 			Name:      ri.name,
 			Namespace: ri.namespace,
 			Hostnames: ri.hostnames,
+			Ref:       routeRef(ri.kind, ri.namespace, ri.name),
 		}
 		for _, bref := range ri.backends {
 			svc := &corev1.Service{}
 			if err := b.Client.Get(ctx, bref, svc); err != nil {
 				continue
 			}
-			sn := ServiceNode{Name: svc.Name, Namespace: svc.Namespace, Type: string(svc.Spec.Type)}
+			sn := ServiceNode{
+				Name: svc.Name, Namespace: svc.Namespace, Type: string(svc.Spec.Type),
+				Ref: svcConsoleRef(svc.Namespace, svc.Name),
+			}
 			pods := b.podsForService(ctx, svc)
 			for pi := range pods {
 				eval := health.EvaluatePod(&pods[pi])
@@ -298,6 +307,7 @@ func (b *Builder) buildGatewayNode(
 					Ready:     eval.Ready,
 					Reason:    eval.Reason,
 					Status:    podStatus(eval),
+					Ref:       podRef(pods[pi].Namespace, pods[pi].Name),
 				}
 				pn.StatusTiming = podStatusTiming(&pods[pi])
 				if eval.Probed {
@@ -646,4 +656,59 @@ func ipLess(a, b string) bool {
 		return a < b
 	}
 	return strings.Compare(string(ia.To16()), string(ib.To16())) < 0
+}
+
+// consoleBaseURL discovers the OpenShift web console URL from the cluster-scoped
+// console.config.openshift.io/cluster resource (status.consoleURL), falling back
+// to the console Route in openshift-console. Returns "" when not on OpenShift.
+func (b *Builder) consoleBaseURL(ctx context.Context) string {
+	// Try console.config.openshift.io/v1 "cluster".
+	cfg := &unstructured.Unstructured{}
+	cfg.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "config.openshift.io", Version: "v1", Kind: "Console",
+	})
+	if err := b.Client.Get(ctx, types.NamespacedName{Name: "cluster"}, cfg); err == nil {
+		if u, found, _ := unstructured.NestedString(cfg.Object, "status", "consoleURL"); found && u != "" {
+			return strings.TrimRight(u, "/")
+		}
+	}
+
+	// Fallback: the console Route.
+	rt := &unstructured.Unstructured{}
+	rt.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "route.openshift.io", Version: "v1", Kind: "Route",
+	})
+	if err := b.Client.Get(ctx, types.NamespacedName{Namespace: "openshift-console", Name: "console"}, rt); err == nil {
+		if host, found, _ := unstructured.NestedString(rt.Object, "spec", "host"); found && host != "" {
+			return "https://" + host
+		}
+	}
+	return ""
+}
+
+// --- console Ref constructors ---
+
+func podRef(namespace, name string) *Ref {
+	return &Ref{Version: "v1", Kind: "Pod", Plural: "pods", Namespace: namespace, Name: name}
+}
+
+func svcConsoleRef(namespace, name string) *Ref {
+	return &Ref{Version: "v1", Kind: "Service", Plural: "services", Namespace: namespace, Name: name}
+}
+
+func gatewayRef(namespace, name string) *Ref {
+	return &Ref{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway", Namespace: namespace, Name: name}
+}
+
+func routeRef(kind, namespace, name string) *Ref {
+	// TCPRoute/TLSRoute live in v1alpha2; HTTPRoute/GRPCRoute in v1.
+	version := "v1"
+	if kind == "TCPRoute" || kind == "TLSRoute" {
+		version = "v1alpha2"
+	}
+	return &Ref{Group: "gateway.networking.k8s.io", Version: version, Kind: kind, Namespace: namespace, Name: name}
+}
+
+func poolRef(namespace, name string) *Ref {
+	return &Ref{Group: "metallb.io", Version: "v1beta1", Kind: "IPAddressPool", Namespace: namespace, Name: name}
 }

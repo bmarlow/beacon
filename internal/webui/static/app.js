@@ -10,6 +10,37 @@
 
   let collapsed = {}; // id -> true when collapsed (persisted across refreshes)
   let timer = null;
+  let consoleBase = ""; // OpenShift console base URL from the graph
+
+  // consoleURL builds an OpenShift console URL for a resource ref, or "" if a
+  // link can't be built (no console base, no ref).
+  //
+  // Console paths:
+  //   namespaced core:   /k8s/ns/<ns>/<plural>/<name>
+  //   namespaced CRD:    /k8s/ns/<ns>/<group>~<version>~<Kind>/<name>
+  //   cluster core:      /k8s/cluster/<plural>/<name>
+  //   cluster CRD:       /k8s/cluster/<group>~<version>~<Kind>/<name>
+  function consoleURL(ref) {
+    if (!consoleBase || !ref || !ref.name) return "";
+    let resource;
+    if (ref.group) {
+      resource = ref.group + "~" + (ref.version || "v1") + "~" + ref.kind;
+    } else {
+      resource = ref.plural || (ref.kind || "").toLowerCase() + "s";
+    }
+    const scope = ref.clusterScoped || !ref.namespace
+      ? "cluster"
+      : "ns/" + encodeURIComponent(ref.namespace);
+    return (
+      consoleBase +
+      "/k8s/" +
+      scope +
+      "/" +
+      resource +
+      "/" +
+      encodeURIComponent(ref.name)
+    );
+  }
 
   function el(tag, cls, text) {
     const e = document.createElement(tag);
@@ -85,7 +116,18 @@
 
     row.appendChild(toggleFor(opts.id, hasChildren));
     if (opts.kind) row.appendChild(el("span", "kind", opts.kind));
-    const nameEl = el("span", "name" + (opts.mono ? " pill-ip" : ""), opts.name);
+    // Name: a console link when we have a base URL + ref, else plain text.
+    const href = consoleURL(opts.ref);
+    let nameEl;
+    if (href) {
+      nameEl = el("a", "name link" + (opts.mono ? " pill-ip" : ""), opts.name);
+      nameEl.href = href;
+      nameEl.target = "_blank";
+      nameEl.rel = "noopener noreferrer";
+      nameEl.title = "Open in OpenShift console";
+    } else {
+      nameEl = el("span", "name" + (opts.mono ? " pill-ip" : ""), opts.name);
+    }
     row.appendChild(nameEl);
     if (opts.ns) row.appendChild(el("span", "ns", opts.ns));
     if (opts.meta) row.appendChild(el("span", "meta", opts.meta));
@@ -121,6 +163,7 @@
       meta: meta.join(" \u00b7 "),
       status: p.status,
       statusForSeconds: p.statusForSeconds,
+      ref: p.ref,
     });
   }
 
@@ -134,6 +177,7 @@
       meta: (s.type || "") + (s.pods ? " \u00b7 " + s.pods.length + " pod(s)" : ""),
       status: s.status,
       statusForSeconds: s.statusForSeconds,
+      ref: s.ref,
       children: kids,
     });
   }
@@ -150,6 +194,7 @@
       meta: meta,
       status: r.status,
       statusForSeconds: r.statusForSeconds,
+      ref: r.ref,
       children: kids,
     });
   }
@@ -172,6 +217,7 @@
       timer: g.timer,
       status: g.status,
       statusForSeconds: g.statusForSeconds,
+      ref: g.ref,
       children: kids,
     });
   }
@@ -201,6 +247,7 @@
       meta: (p.addresses || []).join(", "),
       status: p.status,
       statusForSeconds: p.statusForSeconds,
+      ref: p.ref,
       children: kids,
     });
   }
@@ -229,6 +276,7 @@
   function render(graph) {
     lastGraph = graph;
     if (!graph) return;
+    consoleBase = (graph.consoleBaseURL || "").replace(/\/$/, "");
     const verEl = document.getElementById("version");
     if (verEl) verEl.textContent = graph.operatorVersion ? "v" + graph.operatorVersion.replace(/^v/, "") : "";
     renderSummary(graph.summary || {});

@@ -303,3 +303,58 @@ func TestBuild_ReplicasVersionAndTiming(t *testing.T) {
 		t.Fatal("expected StatusSince to be set")
 	}
 }
+
+func TestBuild_RefsPopulated(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.9"}}},
+	}
+	backendSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "app"}}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod", Namespace: "app"}}
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{Name: "svc-1", Namespace: "app",
+			Labels: map[string]string{discoveryv1.LabelServiceName: "svc"}},
+		Endpoints: []discoveryv1.Endpoint{{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "pod", Namespace: "app"}}},
+	}
+	route := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}}},
+			Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{{
+				BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"}},
+			}}}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(pool, gw, backendSvc, pod, slice, route).Build()
+
+	g, err := (&Builder{Client: cl, PolicyName: "cluster"}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	p := g.Pools[0]
+	if p.Ref == nil || p.Ref.Group != "metallb.io" || p.Ref.Kind != "IPAddressPool" {
+		t.Fatalf("pool ref wrong: %+v", p.Ref)
+	}
+	gwn := p.IPs[0].Gateways[0]
+	if gwn.Ref == nil || gwn.Ref.Group != "gateway.networking.k8s.io" || gwn.Ref.Kind != "Gateway" {
+		t.Fatalf("gateway ref wrong: %+v", gwn.Ref)
+	}
+	rt := gwn.Routes[0]
+	if rt.Ref == nil || rt.Ref.Kind != "HTTPRoute" || rt.Ref.Version != "v1" {
+		t.Fatalf("route ref wrong: %+v", rt.Ref)
+	}
+	sv := rt.Services[0]
+	if sv.Ref == nil || sv.Ref.Plural != "services" || sv.Ref.Group != "" {
+		t.Fatalf("service ref wrong: %+v", sv.Ref)
+	}
+	pd := sv.Pods[0]
+	if pd.Ref == nil || pd.Ref.Plural != "pods" {
+		t.Fatalf("pod ref wrong: %+v", pd.Ref)
+	}
+}

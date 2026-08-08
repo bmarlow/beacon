@@ -98,3 +98,19 @@ rules:
       - get
       - list
       - watch
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - consoles
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - route.openshift.io
+    resources:
+      - routes
+    verbs:
+      - get
+      - list
+      - watch

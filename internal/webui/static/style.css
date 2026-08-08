@@ -104,6 +104,9 @@ body {
   padding: 1px 6px; white-space: nowrap;
 }
 .name { font-weight: 600; }
+a.name.link { color: var(--accent); text-decoration: none; cursor: pointer; }
+a.name.link:hover { text-decoration: underline; }
+a.name.link::after { content: " \2197"; font-size: 10px; color: var(--muted); }
 .ns { color: var(--muted); font-size: 12px; }
 .meta { color: var(--muted); font-size: 12px; margin-left: 4px; }
 .spacer { flex: 1; }
