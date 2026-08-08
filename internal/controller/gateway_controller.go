@@ -98,6 +98,7 @@ type gwState struct {
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies/status,verbs=get;update;patch
 

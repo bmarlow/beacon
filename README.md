@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/beacon-logo.png" alt="Beacon logo" width="160" height="160" />
+</p>
+
 # Beacon
 
 **Beacon** is an OpenShift/Kubernetes operator that couples **Gateway API**

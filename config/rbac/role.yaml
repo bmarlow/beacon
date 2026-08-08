@@ -121,3 +121,14 @@ rules:
       - create
       - update
       - patch
+  - apiGroups:
+      - console.openshift.io
+    resources:
+      - consolelinks
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch

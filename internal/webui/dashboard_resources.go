@@ -46,7 +46,12 @@ const (
 	saNamespaceFilePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 )
 
-var routeGVK = schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"}
+var (
+	routeGVK       = schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"}
+	consoleLinkGVK = schema.GroupVersionKind{Group: "console.openshift.io", Version: "v1", Kind: "ConsoleLink"}
+)
+
+const consoleLinkName = "beacon-dashboard"
 
 // ResourceManager creates and owns the dashboard Service and (on OpenShift) the
 // Route at operator startup, so these are lifecycle-managed by the operator
@@ -90,6 +95,17 @@ func (m *ResourceManager) Start(ctx context.Context) error {
 			logger.Error(err, "failed ensuring dashboard Route")
 		} else {
 			logger.Info("ensured dashboard Route", "namespace", ns, "name", dashboardName)
+		}
+
+		// Publish a ConsoleLink in the console's Application Launcher (the grid
+		// menu, top-right of every console page) so the dashboard is easy to
+		// find. Requires the Route host to be admitted.
+		if host := m.routeHost(ctx, ns); host != "" && m.consoleLinkInstalled() {
+			if err := m.ensureConsoleLink(ctx, "https://"+host+"/"); err != nil {
+				logger.Error(err, "failed ensuring dashboard ConsoleLink")
+			} else {
+				logger.Info("ensured dashboard ConsoleLink", "name", consoleLinkName)
+			}
 		}
 	} else {
 		logger.Info("Route CRD not present; skipping dashboard Route (non-OpenShift cluster)")
@@ -237,6 +253,56 @@ func (m *ResourceManager) ensureRoute(ctx context.Context, ns string) error {
 	// Preserve the existing resourceVersion for update.
 	route.SetResourceVersion(existing.GetResourceVersion())
 	return m.Client.Update(ctx, route)
+}
+
+// routeHost returns the admitted host of the dashboard Route, or "".
+func (m *ResourceManager) routeHost(ctx context.Context, ns string) string {
+	rt := &unstructured.Unstructured{}
+	rt.SetGroupVersionKind(routeGVK)
+	if err := m.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: dashboardName}, rt); err != nil {
+		return ""
+	}
+	if host, found, _ := unstructured.NestedString(rt.Object, "spec", "host"); found {
+		return host
+	}
+	return ""
+}
+
+func (m *ResourceManager) consoleLinkInstalled() bool {
+	mappings, err := m.Client.RESTMapper().RESTMappings(consoleLinkGVK.GroupKind(), consoleLinkGVK.Version)
+	return err == nil && len(mappings) > 0
+}
+
+// ensureConsoleLink creates/updates a cluster-scoped ConsoleLink that adds the
+// Beacon dashboard to the OpenShift console's Application Launcher (grid menu).
+func (m *ResourceManager) ensureConsoleLink(ctx context.Context, href string) error {
+	link := &unstructured.Unstructured{}
+	link.SetGroupVersionKind(consoleLinkGVK)
+	link.SetName(consoleLinkName)
+	link.SetLabels(dashboardLabels())
+	spec := map[string]interface{}{
+		"href":     href,
+		"text":     "Beacon Dashboard",
+		"location": "ApplicationMenu",
+		"applicationMenu": map[string]interface{}{
+			"section": "Observability",
+		},
+	}
+	if err := unstructured.SetNestedMap(link.Object, spec, "spec"); err != nil {
+		return err
+	}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(consoleLinkGVK)
+	err := m.Client.Get(ctx, types.NamespacedName{Name: consoleLinkName}, existing)
+	if apierrors.IsNotFound(err) {
+		return m.Client.Create(ctx, link)
+	}
+	if err != nil {
+		return err
+	}
+	link.SetResourceVersion(existing.GetResourceVersion())
+	return m.Client.Update(ctx, link)
 }
 
 // AddToManager registers the ResourceManager as a manager Runnable.
