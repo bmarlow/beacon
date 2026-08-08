@@ -34,6 +34,23 @@ type GatewaySnapshot struct {
 	Advertisement  string
 	LastTransition time.Time
 	Message        string
+
+	// Timer reflects a running dampening timer (backoff before scaling to zero,
+	// or recovery before scaling back up). Nil when no timer is active.
+	Timer *TimerStatus
+}
+
+// TimerStatus describes a running dampening timer for the UI.
+type TimerStatus struct {
+	// Kind is "backoff" (unhealthy -> withdraw) or "recovery" (healthy ->
+	// re-advertise).
+	Kind string
+	// Threshold is the configured duration the condition must persist.
+	Threshold time.Duration
+	// Elapsed is how long the condition has persisted so far.
+	Elapsed time.Duration
+	// Remaining is Threshold-Elapsed (never negative).
+	Remaining time.Duration
 }
 
 // Store is a concurrency-safe map of Gateway -> snapshot.

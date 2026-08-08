@@ -19,6 +19,7 @@ package topology
 import (
 	"context"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -208,5 +209,48 @@ func TestBuild_WithdrawnReflectsInStatus(t *testing.T) {
 	}
 	if g.Summary.WithdrawnIPs != 1 {
 		t.Fatalf("expected 1 withdrawn IP, got %d", g.Summary.WithdrawnIPs)
+	}
+}
+
+func TestBuild_TimerSurfacedInStatus(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.5"}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gw).Build()
+
+	// Backoff timer running: unhealthy 2s of 5s threshold.
+	store := state.New()
+	store.Set(typesNN("app", "gw"), state.GatewaySnapshot{
+		Health:        "Unhealthy",
+		Advertisement: "PendingWithdrawal",
+		Timer: &state.TimerStatus{
+			Kind:      "backoff",
+			Threshold: 5 * time.Second,
+			Elapsed:   2 * time.Second,
+			Remaining: 3 * time.Second,
+		},
+	})
+
+	b := &Builder{Client: cl, States: store, PolicyName: "cluster"}
+	g, err := b.Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	ip := g.Pools[0].IPs[0]
+	if ip.Timer == nil {
+		t.Fatal("expected timer on IP node")
+	}
+	if ip.Timer.Kind != "backoff" || ip.Timer.ThresholdSec != 5 ||
+		ip.Timer.ElapsedSec != 2 || ip.Timer.RemainingSec != 3 {
+		t.Fatalf("unexpected timer: %+v", ip.Timer)
+	}
+	if ip.Gateways[0].Timer == nil || ip.Gateways[0].Timer.Kind != "backoff" {
+		t.Fatalf("expected backoff timer on gateway node, got %+v", ip.Gateways[0].Timer)
 	}
 }

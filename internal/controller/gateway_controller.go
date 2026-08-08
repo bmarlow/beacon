@@ -163,12 +163,12 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Run dampening state machine and act.
 	adv := &advertiser.Advertiser{Client: r.Client, Config: spec.MetalLB}
 
-	requeue, advState, err := r.reconcileAdvertisement(ctx, gw, spec, current, resolution, adv, resync)
+	requeue, advState, timer, err := r.reconcileAdvertisement(ctx, gw, spec, current, resolution, adv, resync)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	r.recordGatewayStatusWithIP(req.NamespacedName, current, advState, resolution.IPs, fromMetalLB)
+	r.recordGatewayStatusWithIP(req.NamespacedName, current, advState, timer, resolution.IPs, fromMetalLB)
 	if err := r.updatePolicyStatus(ctx, pol); err != nil {
 		logger.V(1).Info("failed updating policy status", "error", err.Error())
 	}
@@ -186,7 +186,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 	resolution *trace.GatewayResolution,
 	adv *advertiser.Advertiser,
 	resync time.Duration,
-) (time.Duration, beaconv1alpha1.AdvertisementState, error) {
+) (time.Duration, beaconv1alpha1.AdvertisementState, *state.TimerStatus, error) {
 	key := types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}
 	now := time.Now()
 
@@ -221,47 +221,77 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 
 	// If paused, never mutate; just report intended state.
 	if spec.Paused {
-		return resync, prevAdv, nil
+		return resync, prevAdv, nil, nil
 	}
 
 	// Decision logic.
 	switch prevAdv {
 	case beaconv1alpha1.AdvertisementWithdrawn, beaconv1alpha1.AdvertisementPendingReadvertise:
 		// Currently withdrawn (or pending re-advertise). Restore only after the
-		// workload has been continuously healthy for readvertiseAfter.
+		// workload has been continuously healthy for the recovery duration
+		// (readvertiseAfter).
 		if current == beaconv1alpha1.HealthUnhealthy {
-			return r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
+			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
+			return d, s, nil, err
 		}
 		r.mu.Lock()
 		healthySince := st.sinceHealthy
 		r.mu.Unlock()
 		if healthySince != nil && now.Sub(*healthySince) >= readvertiseAfter {
 			r.event(gw, corev1.EventTypeNormal, "Readvertised",
-				fmt.Sprintf("workload healthy for %s; restoring MetalLB advertisement for %v", readvertiseAfter, resolution.IPs))
-			return r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
+				fmt.Sprintf("workload healthy for %s (recovery); restoring MetalLB advertisement for %v", readvertiseAfter, resolution.IPs))
+			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
+			return d, s, nil, err
 		}
-		// Timer still running.
+		// Recovery timer still running.
 		r.setAdvState(key, beaconv1alpha1.AdvertisementPendingReadvertise)
-		remaining := readvertiseAfter - now.Sub(deref(healthySince, now))
-		return clampRequeue(remaining, resync), beaconv1alpha1.AdvertisementPendingReadvertise, nil
+		elapsed := now.Sub(deref(healthySince, now))
+		remaining := readvertiseAfter - elapsed
+		timer := newTimer("recovery", readvertiseAfter, elapsed)
+		return clampRequeue(remaining, resync), beaconv1alpha1.AdvertisementPendingReadvertise, timer, nil
 
 	default: // Advertised or PendingWithdrawal
 		if current != beaconv1alpha1.HealthUnhealthy {
 			// Healthy: ensure advertised.
-			return r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
+			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
+			return d, s, nil, err
 		}
-		// Unhealthy: withdraw only after continuous unhealthy for withdrawAfter.
+		// Unhealthy: withdraw only after continuous unhealthy for the backoff
+		// duration (withdrawAfter).
 		r.mu.Lock()
 		unhealthySince := st.sinceUnhealthy
 		r.mu.Unlock()
 		if unhealthySince != nil && now.Sub(*unhealthySince) >= withdrawAfter {
 			r.event(gw, corev1.EventTypeWarning, "Withdrawn",
-				fmt.Sprintf("workload unhealthy for %s; withdrawing MetalLB advertisement for %v", withdrawAfter, resolution.IPs))
-			return r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
+				fmt.Sprintf("workload unhealthy for %s (backoff); withdrawing MetalLB advertisement for %v", withdrawAfter, resolution.IPs))
+			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
+			return d, s, nil, err
 		}
 		r.setAdvState(key, beaconv1alpha1.AdvertisementPendingWithdrawal)
-		remaining := withdrawAfter - now.Sub(deref(unhealthySince, now))
-		return clampRequeue(remaining, resync), beaconv1alpha1.AdvertisementPendingWithdrawal, nil
+		elapsed := now.Sub(deref(unhealthySince, now))
+		remaining := withdrawAfter - elapsed
+		timer := newTimer("backoff", withdrawAfter, elapsed)
+		return clampRequeue(remaining, resync), beaconv1alpha1.AdvertisementPendingWithdrawal, timer, nil
+	}
+}
+
+// newTimer builds a TimerStatus, clamping elapsed/remaining to sane bounds.
+func newTimer(kind string, threshold, elapsed time.Duration) *state.TimerStatus {
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	if elapsed > threshold {
+		elapsed = threshold
+	}
+	remaining := threshold - elapsed
+	if remaining < 0 {
+		remaining = 0
+	}
+	return &state.TimerStatus{
+		Kind:      kind,
+		Threshold: threshold,
+		Elapsed:   elapsed,
+		Remaining: remaining,
 	}
 }
 
@@ -451,10 +481,10 @@ func (r *GatewayReconciler) loadPolicy(ctx context.Context) (*beaconv1alpha1.Gat
 // --- status bookkeeping (in-memory, flushed to the policy status) ---
 
 func (r *GatewayReconciler) recordGatewayStatus(key types.NamespacedName, h beaconv1alpha1.HealthState, a beaconv1alpha1.AdvertisementState, ips []string) {
-	r.recordGatewayStatusWithIP(key, h, a, ips, false)
+	r.recordGatewayStatusWithIP(key, h, a, nil, ips, false)
 }
 
-func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, h beaconv1alpha1.HealthState, a beaconv1alpha1.AdvertisementState, ips []string, fromMetalLB bool) {
+func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, h beaconv1alpha1.HealthState, a beaconv1alpha1.AdvertisementState, timer *state.TimerStatus, ips []string, fromMetalLB bool) {
 	r.mu.Lock()
 	st := r.state[key]
 	if st == nil {
@@ -474,6 +504,7 @@ func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, 
 			Health:         string(h),
 			Advertisement:  adv,
 			LastTransition: time.Now(),
+			Timer:          timer,
 		})
 	}
 	_ = ips

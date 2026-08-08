@@ -98,6 +98,8 @@ type IPNode struct {
 	Advertisement string        `json:"advertisement"` // Advertised/Withdrawn/Pending*
 	Status        Status        `json:"status"`
 	Gateways      []GatewayNode `json:"gateways"`
+	// Timer mirrors the running dampening timer of the owning Gateway, if any.
+	Timer *Timer `json:"timer,omitempty"`
 }
 
 // GatewayNode is a Gateway API Gateway.
@@ -115,6 +117,21 @@ type GatewayNode struct {
 	ProxyService  *ServiceRef `json:"proxyService,omitempty"`
 	Routes        []RouteNode `json:"routes"`
 	Status        Status      `json:"status"`
+	// Timer describes a running dampening timer (backoff/recovery), if any.
+	Timer *Timer `json:"timer,omitempty"`
+}
+
+// Timer surfaces a running dampening timer to the UI.
+//
+//   - Kind "backoff": backends unhealthy; counting down to scaling the Gateway
+//     proxy to zero (withdraw). Threshold = spec.withdrawAfter.
+//   - Kind "recovery": backends healthy again; counting down to scaling the
+//     Gateway proxy back up (re-advertise). Threshold = spec.readvertiseAfter.
+type Timer struct {
+	Kind         string `json:"kind"`
+	ThresholdSec int64  `json:"thresholdSeconds"`
+	ElapsedSec   int64  `json:"elapsedSeconds"`
+	RemainingSec int64  `json:"remainingSeconds"`
 }
 
 // RouteNode is an xRoute attached to the Gateway.

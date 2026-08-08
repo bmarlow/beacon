@@ -136,6 +136,9 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 				pn.IPs = append(pn.IPs, IPNode{}) // placeholder; filled after
 			}
 			ipn.Advertisement = gn.Advertisement
+			if gn.Timer != nil {
+				ipn.Timer = gn.Timer
+			}
 			ipn.Gateways = append(ipn.Gateways, *gn)
 			placed = true
 		}
@@ -233,6 +236,14 @@ func (b *Builder) buildGatewayNode(
 			}
 		}
 		node.Message = snap.Message
+		if snap.Timer != nil {
+			node.Timer = &Timer{
+				Kind:         snap.Timer.Kind,
+				ThresholdSec: int64(snap.Timer.Threshold.Round(time.Second) / time.Second),
+				ElapsedSec:   int64(snap.Timer.Elapsed.Round(time.Second) / time.Second),
+				RemainingSec: int64(snap.Timer.Remaining.Round(time.Second) / time.Second),
+			}
+		}
 	}
 
 	// Routes -> backend services -> pods.

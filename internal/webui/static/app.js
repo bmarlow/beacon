@@ -23,6 +23,34 @@
     return b;
   }
 
+  // timerChip renders a running dampening timer, e.g.:
+  //   "backoff 2s / 5s (3s left)"  or  "recovery 12s / 30s (18s left)"
+  function timerChip(t) {
+    const label =
+      t.kind +
+      " " +
+      t.elapsedSeconds +
+      "s / " +
+      t.thresholdSeconds +
+      "s (" +
+      t.remainingSeconds +
+      "s left)";
+    const c = el("span", "timer timer-" + t.kind, label);
+    c.title =
+      t.kind === "backoff"
+        ? "Backends unhealthy for " +
+          t.elapsedSeconds +
+          "s; Gateway proxy scales to 0 (withdraw) after " +
+          t.thresholdSeconds +
+          "s."
+        : "Backends healthy for " +
+          t.elapsedSeconds +
+          "s; Gateway proxy scales back up (re-advertise) after " +
+          t.thresholdSeconds +
+          "s.";
+    return c;
+  }
+
   function toggleFor(id, hasChildren) {
     const t = el("span", "toggle" + (hasChildren ? "" : " empty"),
       collapsed[id] ? "+" : "\u2212");
@@ -48,6 +76,7 @@
     if (opts.ns) row.appendChild(el("span", "ns", opts.ns));
     if (opts.meta) row.appendChild(el("span", "meta", opts.meta));
     row.appendChild(el("span", "spacer"));
+    if (opts.timer) row.appendChild(timerChip(opts.timer));
     if (opts.adv) row.appendChild(el("span", "adv", opts.adv));
     row.appendChild(badge(opts.status));
     wrap.appendChild(row);
@@ -116,6 +145,7 @@
       ns: g.namespace,
       meta: meta.join(" \u00b7 "),
       adv: g.advertisement,
+      timer: g.timer,
       status: g.status,
       children: kids,
     });
@@ -129,6 +159,7 @@
       name: ip.ip,
       mono: true,
       adv: ip.advertisement,
+      timer: ip.timer,
       status: ip.status,
       children: kids,
     });
