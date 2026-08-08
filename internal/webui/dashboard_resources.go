@@ -122,15 +122,15 @@ func (m *ResourceManager) ownerRef(ctx context.Context, ns string) *metav1.Owner
 	if err := m.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: operatorDeployment}, dep); err != nil {
 		return nil
 	}
-	controller := true
-	blockOwnerDeletion := true
+	// Note: we intentionally do NOT set Controller/BlockOwnerDeletion. Setting
+	// those would require the operator to have update on the owner's
+	// finalizers subresource. A plain (non-controller) ownerRef only requires
+	// delete permission on the owner type, which we grant for deployments.
 	return &metav1.OwnerReference{
-		APIVersion:         "apps/v1",
-		Kind:               "Deployment",
-		Name:               dep.Name,
-		UID:                dep.UID,
-		Controller:         &controller,
-		BlockOwnerDeletion: &blockOwnerDeletion,
+		APIVersion: "apps/v1",
+		Kind:       "Deployment",
+		Name:       dep.Name,
+		UID:        dep.UID,
 	}
 }
 
