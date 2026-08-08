@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -78,6 +79,9 @@ type gwState struct {
 	sinceHealthy   *time.Time
 	sinceUnhealthy *time.Time
 	advertisement  beaconv1alpha1.AdvertisementState
+	ips            []string
+	fromMetalLB    bool
+	timer          *state.TimerStatus
 }
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
@@ -495,6 +499,9 @@ func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, 
 	if a != "" {
 		st.advertisement = a
 	}
+	st.ips = ips
+	st.fromMetalLB = fromMetalLB
+	st.timer = timer
 	adv := string(st.advertisement)
 	r.mu.Unlock()
 
@@ -507,8 +514,6 @@ func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, 
 			Timer:          timer,
 		})
 	}
-	_ = ips
-	_ = fromMetalLB
 }
 
 // updatePolicyStatus recomputes aggregate counters and writes them to the
@@ -516,24 +521,48 @@ func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, 
 func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv1alpha1.GatewayHealthPolicy) error {
 	r.mu.Lock()
 	var managed, advertised, withdrawn int32
-	for range r.state {
+	gateways := make([]beaconv1alpha1.GatewayStatus, 0, len(r.state))
+	for key, st := range r.state {
 		managed++
-	}
-	for _, st := range r.state {
 		switch st.advertisement {
 		case beaconv1alpha1.AdvertisementWithdrawn, beaconv1alpha1.AdvertisementPendingReadvertise:
 			withdrawn++
 		default:
 			advertised++
 		}
+		gs := beaconv1alpha1.GatewayStatus{
+			Namespace:     key.Namespace,
+			Name:          key.Name,
+			IPs:           append([]string(nil), st.ips...),
+			FromMetalLB:   st.fromMetalLB,
+			Health:        st.health,
+			Advertisement: st.advertisement,
+		}
+		if st.timer != nil {
+			gs.Timer = &beaconv1alpha1.TimerStatus{
+				Kind:             st.timer.Kind,
+				ThresholdSeconds: int64(st.timer.Threshold.Round(time.Second) / time.Second),
+				ElapsedSeconds:   int64(st.timer.Elapsed.Round(time.Second) / time.Second),
+				RemainingSeconds: int64(st.timer.Remaining.Round(time.Second) / time.Second),
+			}
+		}
+		gateways = append(gateways, gs)
 	}
 	r.mu.Unlock()
+
+	sort.Slice(gateways, func(i, j int) bool {
+		if gateways[i].Namespace != gateways[j].Namespace {
+			return gateways[i].Namespace < gateways[j].Namespace
+		}
+		return gateways[i].Name < gateways[j].Name
+	})
 
 	patch := client.MergeFrom(pol.DeepCopy())
 	pol.Status.ObservedGeneration = pol.Generation
 	pol.Status.ManagedGateways = managed
 	pol.Status.AdvertisedIPs = advertised
 	pol.Status.WithdrawnIPs = withdrawn
+	pol.Status.Gateways = gateways
 	meta := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,

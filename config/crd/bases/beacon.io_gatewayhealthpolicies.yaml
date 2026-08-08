@@ -150,6 +150,20 @@ spec:
                         format: date-time
                       message:
                         type: string
+                      timer:
+                        type: object
+                        properties:
+                          kind:
+                            type: string
+                          thresholdSeconds:
+                            type: integer
+                            format: int64
+                          elapsedSeconds:
+                            type: integer
+                            format: int64
+                          remainingSeconds:
+                            type: integer
+                            format: int64
                 conditions:
                   type: array
                   x-kubernetes-list-type: map

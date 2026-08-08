@@ -179,6 +179,32 @@ type GatewayStatus struct {
 	// Message is a human-readable explanation of the current state.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Timer describes a running dampening timer, if any. Published by the
+	// active (leader) controller so all replicas' dashboards render it
+	// consistently.
+	// +optional
+	Timer *TimerStatus `json:"timer,omitempty"`
+}
+
+// TimerStatus describes a running dampening timer.
+type TimerStatus struct {
+	// Kind is "backoff" (backends unhealthy; counting down to withdraw) or
+	// "recovery" (backends healthy again; counting down to re-advertise).
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// ThresholdSeconds is the configured duration the condition must persist.
+	// +optional
+	ThresholdSeconds int64 `json:"thresholdSeconds,omitempty"`
+
+	// ElapsedSeconds is how long the condition has persisted so far.
+	// +optional
+	ElapsedSeconds int64 `json:"elapsedSeconds,omitempty"`
+
+	// RemainingSeconds is ThresholdSeconds-ElapsedSeconds (never negative).
+	// +optional
+	RemainingSeconds int64 `json:"remainingSeconds,omitempty"`
 }
 
 // HealthState enumerates aggregate Gateway health values.

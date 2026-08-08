@@ -184,6 +184,11 @@ func (in *GatewayStatus) DeepCopyInto(out *GatewayStatus) {
 		in, out := &in.LastTransitionTime, &out.LastTransitionTime
 		*out = (*in).DeepCopy()
 	}
+	if in.Timer != nil {
+		in, out := &in.Timer, &out.Timer
+		*out = new(TimerStatus)
+		**out = **in
+	}
 }
 
 // DeepCopy is a deepcopy function, copying the receiver, creating a new GatewayStatus.
@@ -192,6 +197,21 @@ func (in *GatewayStatus) DeepCopy() *GatewayStatus {
 		return nil
 	}
 	out := new(GatewayStatus)
+	in.DeepCopyInto(out)
+	return out
+}
+
+// DeepCopyInto is a deepcopy function, copying the receiver, writing into out. in must be non-nil.
+func (in *TimerStatus) DeepCopyInto(out *TimerStatus) {
+	*out = *in
+}
+
+// DeepCopy is a deepcopy function, copying the receiver, creating a new TimerStatus.
+func (in *TimerStatus) DeepCopy() *TimerStatus {
+	if in == nil {
+		return nil
+	}
+	out := new(TimerStatus)
 	in.DeepCopyInto(out)
 	return out
 }

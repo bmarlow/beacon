@@ -64,8 +64,14 @@ type routeInfo struct {
 func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 	g := &Graph{GeneratedAt: time.Now()}
 
-	// Load policy (config): timers, exemptions, metallb namespace.
-	spec := b.loadPolicySpec(ctx)
+	// Load policy (config + status). Status is shared across all replicas, so
+	// using it for advertisement/timer keeps the dashboard consistent
+	// regardless of which replica serves the request.
+	pol := b.loadPolicy(ctx)
+	spec := &pol.Spec
+	if spec.MetalLB.Namespace == "" {
+		spec.MetalLB.Namespace = "metallb-system"
+	}
 	g.MetalLBNamespace = spec.MetalLB.Namespace
 
 	// Load MetalLB pools.
@@ -88,10 +94,12 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 		return nil, err
 	}
 
-	// Build a GatewayNode for each Gateway.
+	// Build a GatewayNode for each Gateway. Prefer the policy's shared status
+	// (written by the leader) so every replica renders identical timer/advert
+	// state; fall back to the local in-memory store if status is empty.
 	var gatewayNodes []GatewayNode
-	snaps := map[types.NamespacedName]state.GatewaySnapshot{}
-	if b.States != nil {
+	snaps := snapshotsFromPolicyStatus(pol)
+	if len(snaps) == 0 && b.States != nil {
 		snaps = b.States.Snapshot()
 	}
 
@@ -309,19 +317,37 @@ func (b *Builder) buildGatewayNode(
 	return node
 }
 
-// loadPolicySpec returns the effective policy spec (with defaults) even if the
-// CR is absent.
-func (b *Builder) loadPolicySpec(ctx context.Context) *beaconv1alpha1.GatewayHealthPolicySpec {
+// loadPolicy returns the GatewayHealthPolicy (empty object if absent).
+func (b *Builder) loadPolicy(ctx context.Context) *beaconv1alpha1.GatewayHealthPolicy {
 	pol := &beaconv1alpha1.GatewayHealthPolicy{}
-	err := b.Client.Get(ctx, types.NamespacedName{Name: b.PolicyName}, pol)
-	spec := &beaconv1alpha1.GatewayHealthPolicySpec{}
-	if err == nil {
-		spec = &pol.Spec
+	if err := b.Client.Get(ctx, types.NamespacedName{Name: b.PolicyName}, pol); err != nil {
+		return &beaconv1alpha1.GatewayHealthPolicy{}
 	}
-	if spec.MetalLB.Namespace == "" {
-		spec.MetalLB.Namespace = "metallb-system"
+	return pol
+}
+
+// snapshotsFromPolicyStatus converts the policy's shared per-Gateway status into
+// the snapshot map the builder consumes.
+func snapshotsFromPolicyStatus(pol *beaconv1alpha1.GatewayHealthPolicy) map[types.NamespacedName]state.GatewaySnapshot {
+	out := map[types.NamespacedName]state.GatewaySnapshot{}
+	for i := range pol.Status.Gateways {
+		gs := &pol.Status.Gateways[i]
+		snap := state.GatewaySnapshot{
+			Health:        string(gs.Health),
+			Advertisement: string(gs.Advertisement),
+			Message:       gs.Message,
+		}
+		if gs.Timer != nil {
+			snap.Timer = &state.TimerStatus{
+				Kind:      gs.Timer.Kind,
+				Threshold: time.Duration(gs.Timer.ThresholdSeconds) * time.Second,
+				Elapsed:   time.Duration(gs.Timer.ElapsedSeconds) * time.Second,
+				Remaining: time.Duration(gs.Timer.RemainingSeconds) * time.Second,
+			}
+		}
+		out[types.NamespacedName{Namespace: gs.Namespace, Name: gs.Name}] = snap
 	}
-	return spec
+	return out
 }
 
 // indexRoutes lists all supported route kinds and groups them by target Gateway.
