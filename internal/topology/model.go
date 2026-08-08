@@ -56,6 +56,9 @@ type Graph struct {
 	// GeneratedAt is when this snapshot was assembled.
 	GeneratedAt time.Time `json:"generatedAt"`
 
+	// OperatorVersion is the Beacon operator build version (git describe / tag).
+	OperatorVersion string `json:"operatorVersion"`
+
 	// MetalLBNamespace is the namespace the pools were read from.
 	MetalLBNamespace string `json:"metallbNamespace"`
 
@@ -82,21 +85,34 @@ type Summary struct {
 	UnhealthyGateway int `json:"unhealthyGateways"`
 }
 
+// StatusTiming records how long a component has been in its current status.
+// Embedded into each node so the UI can render "for 3m12s".
+type StatusTiming struct {
+	// StatusSince is when the component entered its current status (RFC3339).
+	// Omitted when unknown.
+	StatusSince *time.Time `json:"statusSince,omitempty"`
+	// StatusForSeconds is the number of seconds the component has been in its
+	// current status. 0 when unknown.
+	StatusForSeconds int64 `json:"statusForSeconds,omitempty"`
+}
+
 // PoolNode is a MetalLB IPAddressPool and the VIPs allocated from it.
 type PoolNode struct {
-	Name       string   `json:"name"`
-	Namespace  string   `json:"namespace"`
-	Addresses  []string `json:"addresses"`
-	AutoAssign *bool    `json:"autoAssign,omitempty"`
-	Status     Status   `json:"status"`
-	IPs        []IPNode `json:"ips"`
+	Name         string   `json:"name"`
+	Namespace    string   `json:"namespace"`
+	Addresses    []string `json:"addresses"`
+	AutoAssign   *bool    `json:"autoAssign,omitempty"`
+	Status       Status   `json:"status"`
+	StatusTiming `json:",inline"`
+	IPs          []IPNode `json:"ips"`
 }
 
 // IPNode is a single VIP and the Gateway that owns it.
 type IPNode struct {
-	IP            string        `json:"ip"`
-	Advertisement string        `json:"advertisement"` // Advertised/Withdrawn/Pending*
-	Status        Status        `json:"status"`
+	IP            string `json:"ip"`
+	Advertisement string `json:"advertisement"` // Advertised/Withdrawn/Pending*
+	Status        Status `json:"status"`
+	StatusTiming  `json:",inline"`
 	Gateways      []GatewayNode `json:"gateways"`
 	// Timer mirrors the running dampening timer of the owning Gateway, if any.
 	Timer *Timer `json:"timer,omitempty"`
@@ -115,8 +131,13 @@ type GatewayNode struct {
 	Advertisement string      `json:"advertisement"`
 	Message       string      `json:"message,omitempty"`
 	ProxyService  *ServiceRef `json:"proxyService,omitempty"`
-	Routes        []RouteNode `json:"routes"`
-	Status        Status      `json:"status"`
+	// ReplicasReady / ReplicasDesired report the Gateway's data-plane (proxy)
+	// Deployment replica counts (summed across proxy Deployments).
+	ReplicasReady   int32       `json:"replicasReady"`
+	ReplicasDesired int32       `json:"replicasDesired"`
+	Routes          []RouteNode `json:"routes"`
+	Status          Status      `json:"status"`
+	StatusTiming    `json:",inline"`
 	// Timer describes a running dampening timer (backoff/recovery), if any.
 	Timer *Timer `json:"timer,omitempty"`
 }
@@ -136,12 +157,13 @@ type Timer struct {
 
 // RouteNode is an xRoute attached to the Gateway.
 type RouteNode struct {
-	Kind      string        `json:"kind"` // HTTPRoute/GRPCRoute/TCPRoute/TLSRoute
-	Name      string        `json:"name"`
-	Namespace string        `json:"namespace"`
-	Hostnames []string      `json:"hostnames,omitempty"`
-	Status    Status        `json:"status"`
-	Services  []ServiceNode `json:"services"`
+	Kind         string   `json:"kind"` // HTTPRoute/GRPCRoute/TCPRoute/TLSRoute
+	Name         string   `json:"name"`
+	Namespace    string   `json:"namespace"`
+	Hostnames    []string `json:"hostnames,omitempty"`
+	Status       Status   `json:"status"`
+	StatusTiming `json:",inline"`
+	Services     []ServiceNode `json:"services"`
 }
 
 // ServiceRef is a lightweight reference (used for the proxy Service).
@@ -153,12 +175,13 @@ type ServiceRef struct {
 
 // ServiceNode is a backend Service referenced by a route.
 type ServiceNode struct {
-	Name      string    `json:"name"`
-	Namespace string    `json:"namespace"`
-	Type      string    `json:"type"`
-	Port      string    `json:"port,omitempty"`
-	Status    Status    `json:"status"`
-	Pods      []PodNode `json:"pods"`
+	Name         string `json:"name"`
+	Namespace    string `json:"namespace"`
+	Type         string `json:"type"`
+	Port         string `json:"port,omitempty"`
+	Status       Status `json:"status"`
+	StatusTiming `json:",inline"`
+	Pods         []PodNode `json:"pods"`
 }
 
 // PodNode is a backend workload Pod with its probe-derived health.
@@ -168,8 +191,9 @@ type PodNode struct {
 	Node      string `json:"node,omitempty"`
 	Phase     string `json:"phase"`
 	// Probed indicates the pod declares at least one health probe.
-	Probed bool   `json:"probed"`
-	Ready  bool   `json:"ready"`
-	Status Status `json:"status"`
-	Reason string `json:"reason,omitempty"`
+	Probed       bool   `json:"probed"`
+	Ready        bool   `json:"ready"`
+	Status       Status `json:"status"`
+	StatusTiming `json:",inline"`
+	Reason       string `json:"reason,omitempty"`
 }

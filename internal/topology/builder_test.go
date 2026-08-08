@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -252,5 +253,53 @@ func TestBuild_TimerSurfacedInStatus(t *testing.T) {
 	}
 	if ip.Gateways[0].Timer == nil || ip.Gateways[0].Timer.Kind != "backoff" {
 		t.Fatalf("expected backoff timer on gateway node, got %+v", ip.Gateways[0].Timer)
+	}
+}
+
+func TestBuild_ReplicasVersionAndTiming(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.7"}}},
+	}
+	// Proxy Deployment: desired 2, ready 1.
+	two := int32(2)
+	proxyDeploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gw-proxy", Namespace: "app",
+			Labels: map[string]string{"gateway.networking.k8s.io/gateway-name": "gw"},
+		},
+		Spec:   appsv1.DeploymentSpec{Replicas: &two},
+		Status: appsv1.DeploymentStatus{ReadyReplicas: 1},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gw, proxyDeploy).Build()
+
+	store := state.New()
+	store.Set(typesNN("app", "gw"), state.GatewaySnapshot{
+		Health:         "Healthy",
+		Advertisement:  "Advertised",
+		LastTransition: time.Now().Add(-90 * time.Second),
+	})
+
+	g, err := (&Builder{Client: cl, States: store, PolicyName: "cluster"}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if g.OperatorVersion == "" {
+		t.Fatal("expected a non-empty operator version")
+	}
+	gwn := g.Pools[0].IPs[0].Gateways[0]
+	if gwn.ReplicasReady != 1 || gwn.ReplicasDesired != 2 {
+		t.Fatalf("expected replicas 1/2, got %d/%d", gwn.ReplicasReady, gwn.ReplicasDesired)
+	}
+	if gwn.StatusForSeconds < 80 || gwn.StatusForSeconds > 100 {
+		t.Fatalf("expected ~90s in status, got %d", gwn.StatusForSeconds)
+	}
+	if gwn.StatusSince == nil {
+		t.Fatal("expected StatusSince to be set")
 	}
 }

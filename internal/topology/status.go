@@ -17,9 +17,76 @@ limitations under the License.
 package topology
 
 import (
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/health"
 )
+
+// timingSince builds a StatusTiming from a transition timestamp.
+func timingSince(t time.Time) StatusTiming {
+	if t.IsZero() {
+		return StatusTiming{}
+	}
+	secs := int64(time.Since(t).Round(time.Second) / time.Second)
+	if secs < 0 {
+		secs = 0
+	}
+	tt := t
+	return StatusTiming{StatusSince: &tt, StatusForSeconds: secs}
+}
+
+// podStatusTiming derives when a pod entered its current readiness status from
+// the PodReady condition's lastTransitionTime (falling back to start time).
+func podStatusTiming(pod *corev1.Pod) StatusTiming {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady && !c.LastTransitionTime.IsZero() {
+			return timingSince(c.LastTransitionTime.Time)
+		}
+	}
+	if pod.Status.StartTime != nil {
+		return timingSince(pod.Status.StartTime.Time)
+	}
+	if !pod.CreationTimestamp.IsZero() {
+		return timingSince(pod.CreationTimestamp.Time)
+	}
+	return StatusTiming{}
+}
+
+// latestChildTiming returns the most-recent (smallest duration) timing among
+// children — i.e. the last time the aggregate could have changed.
+func latestChildTiming(children []StatusTiming) StatusTiming {
+	var best StatusTiming
+	var bestSince *time.Time
+	for _, c := range children {
+		if c.StatusSince == nil {
+			continue
+		}
+		if bestSince == nil || c.StatusSince.After(*bestSince) {
+			bestSince = c.StatusSince
+			best = c
+		}
+	}
+	return best
+}
+
+func podTimings(pods []PodNode) []StatusTiming {
+	out := make([]StatusTiming, 0, len(pods))
+	for i := range pods {
+		out = append(out, pods[i].StatusTiming)
+	}
+	return out
+}
+
+func serviceTimings(svcs []ServiceNode) []StatusTiming {
+	out := make([]StatusTiming, 0, len(svcs))
+	for i := range svcs {
+		out = append(out, svcs[i].StatusTiming)
+	}
+	return out
+}
 
 // severity ranks statuses so we can compute the "worst" child status.
 func severity(s Status) int {

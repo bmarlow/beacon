@@ -123,6 +123,17 @@ body {
 .timer-backoff { background: rgba(210,153,34,0.18); color: var(--degraded); border: 1px solid var(--degraded); }
 .timer-recovery { background: rgba(88,166,255,0.18); color: var(--pending); border: 1px solid var(--pending); }
 
+.since {
+  font-size: 11px; color: var(--muted); white-space: nowrap;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.version {
+  font-size: 12px; font-weight: 500; color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  vertical-align: middle;
+}
+
 /* status left border colors */
 .st-Healthy > .row { border-left-color: var(--healthy); }
 .st-Degraded > .row { border-left-color: var(--degraded); }

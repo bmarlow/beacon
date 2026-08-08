@@ -23,6 +23,20 @@
     return b;
   }
 
+  // dur formats a number of seconds as a compact human duration, e.g.
+  // 45 -> "45s", 130 -> "2m10s", 3720 -> "1h2m", 90000 -> "1d1h".
+  function dur(s) {
+    s = Math.max(0, Math.floor(s));
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (d > 0) return d + "d" + (h ? h + "h" : "");
+    if (h > 0) return h + "h" + (m ? m + "m" : "");
+    if (m > 0) return m + "m" + (sec ? sec + "s" : "");
+    return sec + "s";
+  }
+
   // timerChip renders a running dampening timer, e.g.:
   //   "backoff 2s / 5s (3s left)"  or  "recovery 12s / 30s (18s left)"
   function timerChip(t) {
@@ -78,6 +92,11 @@
     row.appendChild(el("span", "spacer"));
     if (opts.timer) row.appendChild(timerChip(opts.timer));
     if (opts.adv) row.appendChild(el("span", "adv", opts.adv));
+    if (opts.statusForSeconds && opts.statusForSeconds > 0) {
+      const since = el("span", "since", "for " + dur(opts.statusForSeconds));
+      since.title = "In status \u201c" + (opts.status || "Unknown") + "\u201d for " + dur(opts.statusForSeconds);
+      row.appendChild(since);
+    }
     row.appendChild(badge(opts.status));
     wrap.appendChild(row);
 
@@ -101,6 +120,7 @@
       ns: p.namespace,
       meta: meta.join(" \u00b7 "),
       status: p.status,
+      statusForSeconds: p.statusForSeconds,
     });
   }
 
@@ -113,6 +133,7 @@
       ns: s.namespace,
       meta: (s.type || "") + (s.pods ? " \u00b7 " + s.pods.length + " pod(s)" : ""),
       status: s.status,
+      statusForSeconds: s.statusForSeconds,
       children: kids,
     });
   }
@@ -128,6 +149,7 @@
       ns: r.namespace,
       meta: meta,
       status: r.status,
+      statusForSeconds: r.statusForSeconds,
       children: kids,
     });
   }
@@ -137,6 +159,8 @@
     const meta = [];
     if (g.className) meta.push("class=" + g.className);
     if (g.exempt) meta.push("exempt");
+    // Proxy replica count (data-plane).
+    meta.push("replicas " + (g.replicasReady || 0) + "/" + (g.replicasDesired || 0));
     if (g.ips && g.ips.length) meta.push(g.ips.join(", "));
     return nodeRow({
       id: "gw/" + g.namespace + "/" + g.name,
@@ -147,6 +171,7 @@
       adv: g.advertisement,
       timer: g.timer,
       status: g.status,
+      statusForSeconds: g.statusForSeconds,
       children: kids,
     });
   }
@@ -160,6 +185,7 @@
       mono: true,
       adv: ip.advertisement,
       timer: ip.timer,
+      statusForSeconds: ip.statusForSeconds,
       status: ip.status,
       children: kids,
     });
@@ -174,6 +200,7 @@
       ns: p.namespace,
       meta: (p.addresses || []).join(", "),
       status: p.status,
+      statusForSeconds: p.statusForSeconds,
       children: kids,
     });
   }
@@ -202,6 +229,8 @@
   function render(graph) {
     lastGraph = graph;
     if (!graph) return;
+    const verEl = document.getElementById("version");
+    if (verEl) verEl.textContent = graph.operatorVersion ? "v" + graph.operatorVersion.replace(/^v/, "") : "";
     renderSummary(graph.summary || {});
     treeEl.innerHTML = "";
 

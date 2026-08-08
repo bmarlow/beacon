@@ -2,6 +2,8 @@
 FROM registry.access.redhat.com/ubi9/go-toolset:1.22 AS builder
 ARG TARGETOS
 ARG TARGETARCH
+# Operator version, injected at link time. Passed by CI (git tag or short SHA).
+ARG VERSION=dev
 
 # Run the build stage as root so the module cache and workdir are always
 # writable (avoids permission issues across build environments).
@@ -19,8 +21,10 @@ COPY api/ api/
 COPY internal/ internal/
 
 # Build a static binary. CGO disabled for a minimal, distroless-compatible image.
+# The version is stamped into internal/version.Version.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -ldflags="-s -w" -o manager cmd/main.go
+    go build -a -ldflags="-s -w -X github.com/bmarlow/beacon/internal/version.Version=${VERSION}" \
+    -o manager cmd/main.go
 
 # Use Red Hat's UBI micro base for a minimal, supportable runtime image.
 FROM registry.access.redhat.com/ubi9/ubi-micro:latest

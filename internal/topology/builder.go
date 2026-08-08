@@ -39,6 +39,7 @@ import (
 	"github.com/bmarlow/beacon/internal/metallb"
 	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/state"
+	"github.com/bmarlow/beacon/internal/version"
 )
 
 const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
@@ -62,7 +63,7 @@ type routeInfo struct {
 
 // Build produces a full topology Graph.
 func (b *Builder) Build(ctx context.Context) (*Graph, error) {
-	g := &Graph{GeneratedAt: time.Now()}
+	g := &Graph{GeneratedAt: time.Now(), OperatorVersion: version.Get()}
 
 	// Load policy (config + status). Status is shared across all replicas, so
 	// using it for advertisement/timer keeps the dashboard consistent
@@ -147,6 +148,10 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 			if gn.Timer != nil {
 				ipn.Timer = gn.Timer
 			}
+			// The VIP's "time in status" mirrors the owning Gateway's.
+			if gn.StatusSince != nil {
+				ipn.StatusTiming = gn.StatusTiming
+			}
 			ipn.Gateways = append(ipn.Gateways, *gn)
 			placed = true
 		}
@@ -167,6 +172,11 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 		}
 		sort.Slice(pn.IPs, func(i, j int) bool { return ipLess(pn.IPs[i].IP, pn.IPs[j].IP) })
 		pn.Status = worstIPStatus(pn.IPs)
+		var ipT []StatusTiming
+		for i := range pn.IPs {
+			ipT = append(ipT, pn.IPs[i].StatusTiming)
+		}
+		pn.StatusTiming = latestChildTiming(ipT)
 	}
 
 	// Emit pools in stable order, skipping pools with no Gateways (still show
@@ -214,13 +224,18 @@ func (b *Builder) buildGatewayNode(
 	// a best-effort flag here too.
 	node.FromMetalLB = false
 
+	// Proxy Deployment replica counts (data-plane scale). This is also Beacon's
+	// withdrawal lever, so scaled-to-zero == withdrawn.
+	ready, desired, _, proxyDrained := b.proxyReplicas(ctx, gw)
+	node.ReplicasReady = ready
+	node.ReplicasDesired = desired
+
 	// Advertisement state is determined from GROUND TRUTH — whether the
 	// Gateway's proxy Deployment is scaled to zero (Beacon's withdrawal
 	// mechanism) — so the dashboard is consistent regardless of which replica
 	// serves it and survives controller restarts. The in-memory store (only
 	// populated on the leader) is used solely to surface the transient
 	// "Pending*" states, which are not encoded in the proxy scale.
-	proxyDrained := b.proxyScaledToZero(ctx, gw)
 	snap, hasSnap := snaps[key]
 	switch {
 	case proxyDrained:
@@ -284,6 +299,7 @@ func (b *Builder) buildGatewayNode(
 					Reason:    eval.Reason,
 					Status:    podStatus(eval),
 				}
+				pn.StatusTiming = podStatusTiming(&pods[pi])
 				if eval.Probed {
 					allProbed++
 					if !eval.Ready {
@@ -293,9 +309,13 @@ func (b *Builder) buildGatewayNode(
 				sn.Pods = append(sn.Pods, pn)
 			}
 			sn.Status = worstPodStatus(sn.Pods)
+			// A Service's "time in status" is the most recent of its pods'
+			// status transitions (the last time its aggregate could have changed).
+			sn.StatusTiming = latestChildTiming(podTimings(sn.Pods))
 			rn.Services = append(rn.Services, sn)
 		}
 		rn.Status = worstServiceStatus(rn.Services)
+		rn.StatusTiming = latestChildTiming(serviceTimings(rn.Services))
 		node.Routes = append(node.Routes, rn)
 	}
 
@@ -314,6 +334,18 @@ func (b *Builder) buildGatewayNode(
 	}
 
 	node.Status = gatewayStatus(node)
+	// Gateway "time in status": prefer the controller-recorded last transition
+	// (when Beacon last changed health/advertisement); fall back to the newest
+	// backend-pod transition.
+	if hasSnap && !snap.LastTransition.IsZero() {
+		node.StatusTiming = timingSince(snap.LastTransition)
+	} else {
+		var childT []StatusTiming
+		for i := range node.Routes {
+			childT = append(childT, node.Routes[i].StatusTiming)
+		}
+		node.StatusTiming = latestChildTiming(childT)
+	}
 	return node
 }
 
@@ -465,26 +497,32 @@ func serviceRef(ref gwapiv1.BackendObjectReference, routeNS string) (types.Names
 	return types.NamespacedName{Namespace: ns, Name: string(ref.Name)}, true
 }
 
-// proxyScaledToZero reports whether all of the Gateway's proxy Deployments are
-// scaled to zero replicas — Beacon's ground-truth "withdrawn" signal.
-func (b *Builder) proxyScaledToZero(ctx context.Context, gw *gwapiv1.Gateway) bool {
+// proxyReplicas returns the summed ready/desired replica counts across the
+// Gateway's proxy Deployment(s), whether any proxy Deployment exists, and
+// whether all are scaled to zero (Beacon's ground-truth "withdrawn" signal).
+func (b *Builder) proxyReplicas(ctx context.Context, gw *gwapiv1.Gateway) (ready, desired int32, found, allZero bool) {
 	list := &appsv1.DeploymentList{}
 	if err := b.Client.List(ctx, list,
 		client.InNamespace(gw.Namespace),
 		client.MatchingLabels{gatewayServiceLabel: gw.Name},
 	); err != nil || len(list.Items) == 0 {
-		return false
+		return 0, 0, false, false
 	}
+	found = true
+	allZero = true
 	for i := range list.Items {
-		r := int32(1)
-		if list.Items[i].Spec.Replicas != nil {
-			r = *list.Items[i].Spec.Replicas
+		d := &list.Items[i]
+		spec := int32(1)
+		if d.Spec.Replicas != nil {
+			spec = *d.Spec.Replicas
 		}
-		if r != 0 {
-			return false
+		desired += spec
+		ready += d.Status.ReadyReplicas
+		if spec != 0 {
+			allZero = false
 		}
 	}
-	return true
+	return ready, desired, found, allZero
 }
 
 func (b *Builder) findProxyService(ctx context.Context, gw *gwapiv1.Gateway) *corev1.Service {
