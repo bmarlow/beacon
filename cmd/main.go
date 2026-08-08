@@ -19,7 +19,9 @@ package main
 import (
 	"crypto/tls"
 	"flag"
+	"net"
 	"os"
+	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
@@ -125,6 +127,14 @@ func main() {
 			setupLog.Error(err, "unable to register topology dashboard")
 			os.Exit(1)
 		}
+		// The operator owns the dashboard Service and (on OpenShift) Route,
+		// creating them at startup. Leader-elected so only one replica acts.
+		port := dashboardPortFromAddr(dashboardAddr)
+		rm := webui.NewResourceManager(mgr.GetClient(), port)
+		if err := rm.AddToManager(mgr); err != nil {
+			setupLog.Error(err, "unable to register dashboard resource manager")
+			os.Exit(1)
+		}
 	}
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
@@ -141,4 +151,18 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// dashboardPortFromAddr parses the port from a bind address like ":8082" or
+// "0.0.0.0:8082". Defaults to 8082 on parse failure.
+func dashboardPortFromAddr(addr string) int32 {
+	_, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return 8082
+	}
+	p, err := strconv.Atoi(portStr)
+	if err != nil || p <= 0 || p > 65535 {
+		return 8082
+	}
+	return int32(p)
 }

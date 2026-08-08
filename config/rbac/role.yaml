@@ -48,6 +48,9 @@ rules:
       - get
       - list
       - watch
+      - create
+      - update
+      - patch
   - apiGroups:
       - ""
     resources:
@@ -114,3 +117,6 @@ rules:
       - get
       - list
       - watch
+      - create
+      - update
+      - patch

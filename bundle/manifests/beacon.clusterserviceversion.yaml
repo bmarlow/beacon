@@ -152,7 +152,7 @@ spec:
               verbs: ["get"]
             - apiGroups: [""]
               resources: ["services"]
-              verbs: ["get", "list", "watch"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
             - apiGroups: [""]
               resources: ["pods", "endpoints"]
               verbs: ["get", "list", "watch"]
@@ -176,7 +176,7 @@ spec:
               verbs: ["get", "list", "watch"]
             - apiGroups: ["route.openshift.io"]
               resources: ["routes"]
-              verbs: ["get", "list", "watch"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:
@@ -221,6 +221,11 @@ spec:
                       - --metrics-bind-address=:8443
                       - --metrics-secure=true
                       - --dashboard-bind-address=:8082
+                    env:
+                      - name: POD_NAMESPACE
+                        valueFrom:
+                          fieldRef:
+                            fieldPath: metadata.namespace
                     ports:
                       - name: dashboard
                         containerPort: 8082

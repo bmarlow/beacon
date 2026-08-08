@@ -9,5 +9,4 @@ resources:
   - ../crd
   - ../rbac
   - ../manager
-  - ../dashboard
   - ../samples

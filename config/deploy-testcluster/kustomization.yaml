@@ -13,7 +13,6 @@ resources:
   - ../crd
   - ../rbac
   - ../manager
-  - ../dashboard
 
 images:
   - name: ghcr.io/bmarlow/beacon

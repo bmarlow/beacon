@@ -1,0 +1,242 @@
+/*
+Copyright 2026.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package webui
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"strings"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
+)
+
+const (
+	dashboardName       = "beacon-dashboard"
+	dashboardPortName   = "dashboard"
+	controlPlaneLabel   = "control-plane"
+	controlPlaneValue   = "controller-manager"
+	operatorDeployment  = "beacon-controller-manager"
+	podNamespaceEnv     = "POD_NAMESPACE"
+	saNamespaceFilePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+)
+
+var routeGVK = schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"}
+
+// ResourceManager creates and owns the dashboard Service and (on OpenShift) the
+// Route at operator startup, so these are lifecycle-managed by the operator
+// rather than applied out-of-band. It runs as a leader-elected Runnable so only
+// the active replica reconciles them.
+type ResourceManager struct {
+	Client        client.Client
+	DashboardPort int32
+}
+
+// NewResourceManager constructs a ResourceManager.
+func NewResourceManager(c client.Client, dashboardPort int32) *ResourceManager {
+	return &ResourceManager{Client: c, DashboardPort: dashboardPort}
+}
+
+// NeedLeaderElection ensures only the leader creates/updates these resources.
+func (m *ResourceManager) NeedLeaderElection() bool { return true }
+
+// Start runs once when this replica becomes leader: it ensures the Service and
+// Route exist, then returns (the resources are static and owner-referenced, so
+// no ongoing reconcile loop is needed).
+func (m *ResourceManager) Start(ctx context.Context) error {
+	logger := log.FromContext(ctx).WithName("dashboard-resources")
+
+	ns, err := operatorNamespace()
+	if err != nil {
+		logger.Info("could not determine operator namespace; skipping dashboard resource management", "error", err.Error())
+		return nil
+	}
+
+	owner := m.ownerRef(ctx, ns) // best-effort; nil if not found
+
+	if err := m.ensureService(ctx, ns, owner); err != nil {
+		logger.Error(err, "failed ensuring dashboard Service")
+	} else {
+		logger.Info("ensured dashboard Service", "namespace", ns, "name", dashboardName)
+	}
+
+	if m.routeInstalled() {
+		if err := m.ensureRoute(ctx, ns, owner); err != nil {
+			logger.Error(err, "failed ensuring dashboard Route")
+		} else {
+			logger.Info("ensured dashboard Route", "namespace", ns, "name", dashboardName)
+		}
+	} else {
+		logger.Info("Route CRD not present; skipping dashboard Route (non-OpenShift cluster)")
+	}
+	return nil
+}
+
+// operatorNamespace resolves the namespace the operator runs in.
+func operatorNamespace() (string, error) {
+	if v := os.Getenv(podNamespaceEnv); v != "" {
+		return v, nil
+	}
+	data, err := os.ReadFile(saNamespaceFilePath)
+	if err != nil {
+		return "", fmt.Errorf("reading %s: %w", saNamespaceFilePath, err)
+	}
+	ns := strings.TrimSpace(string(data))
+	if ns == "" {
+		return "", fmt.Errorf("empty namespace in %s", saNamespaceFilePath)
+	}
+	return ns, nil
+}
+
+// ownerRef returns an OwnerReference to the operator's own Deployment so the
+// Service/Route are garbage-collected when the operator is uninstalled. Returns
+// nil if the Deployment can't be found (resources are still created, just not
+// owner-referenced).
+func (m *ResourceManager) ownerRef(ctx context.Context, ns string) *metav1.OwnerReference {
+	dep := &appsv1.Deployment{}
+	if err := m.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: operatorDeployment}, dep); err != nil {
+		return nil
+	}
+	controller := true
+	blockOwnerDeletion := true
+	return &metav1.OwnerReference{
+		APIVersion:         "apps/v1",
+		Kind:               "Deployment",
+		Name:               dep.Name,
+		UID:                dep.UID,
+		Controller:         &controller,
+		BlockOwnerDeletion: &blockOwnerDeletion,
+	}
+}
+
+func dashboardLabels() map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/name":       "beacon",
+		"app.kubernetes.io/component":  "dashboard",
+		"app.kubernetes.io/managed-by": "beacon-operator",
+	}
+}
+
+func (m *ResourceManager) ensureService(ctx context.Context, ns string, owner *metav1.OwnerReference) error {
+	desired := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dashboardName,
+			Namespace: ns,
+			Labels:    dashboardLabels(),
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{controlPlaneLabel: controlPlaneValue},
+			Ports: []corev1.ServicePort{{
+				Name:       dashboardPortName,
+				Port:       m.DashboardPort,
+				TargetPort: intstr.FromString(dashboardPortName),
+				Protocol:   corev1.ProtocolTCP,
+			}},
+		},
+	}
+	if owner != nil {
+		desired.OwnerReferences = []metav1.OwnerReference{*owner}
+	}
+
+	existing := &corev1.Service{}
+	err := m.Client.Get(ctx, types.NamespacedName{Namespace: ns, Name: dashboardName}, existing)
+	if apierrors.IsNotFound(err) {
+		return m.Client.Create(ctx, desired)
+	}
+	if err != nil {
+		return err
+	}
+	// Update mutable fields, preserving the cluster-assigned ClusterIP.
+	existing.Labels = desired.Labels
+	existing.Spec.Selector = desired.Spec.Selector
+	existing.Spec.Ports = desired.Spec.Ports
+	if owner != nil && len(existing.OwnerReferences) == 0 {
+		existing.OwnerReferences = []metav1.OwnerReference{*owner}
+	}
+	return m.Client.Update(ctx, existing)
+}
+
+func (m *ResourceManager) routeInstalled() bool {
+	mappings, err := m.Client.RESTMapper().RESTMappings(routeGVK.GroupKind(), routeGVK.Version)
+	return err == nil && len(mappings) > 0
+}
+
+func (m *ResourceManager) ensureRoute(ctx context.Context, ns string, owner *metav1.OwnerReference) error {
+	route := &unstructured.Unstructured{}
+	route.SetGroupVersionKind(routeGVK)
+	key := types.NamespacedName{Namespace: ns, Name: dashboardName}
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(routeGVK)
+	err := m.Client.Get(ctx, key, existing)
+	exists := err == nil
+	if err != nil && !apierrors.IsNotFound(err) && apimeta.IsNoMatchError(err) {
+		return nil // CRD vanished between check and get; treat as non-OpenShift
+	}
+	if err != nil && !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+		return err
+	}
+
+	route.SetName(dashboardName)
+	route.SetNamespace(ns)
+	route.SetLabels(dashboardLabels())
+	route.SetAnnotations(map[string]string{"haproxy.router.openshift.io/timeout": "30s"})
+	if owner != nil {
+		route.SetOwnerReferences([]metav1.OwnerReference{*owner})
+	}
+	spec := map[string]interface{}{
+		"to": map[string]interface{}{
+			"kind":   "Service",
+			"name":   dashboardName,
+			"weight": int64(100),
+		},
+		"port": map[string]interface{}{
+			"targetPort": dashboardPortName,
+		},
+		"tls": map[string]interface{}{
+			"termination":                   "edge",
+			"insecureEdgeTerminationPolicy": "Redirect",
+		},
+		"wildcardPolicy": "None",
+	}
+	if err := unstructured.SetNestedMap(route.Object, spec, "spec"); err != nil {
+		return err
+	}
+
+	if !exists {
+		return m.Client.Create(ctx, route)
+	}
+	// Preserve the existing resourceVersion for update.
+	route.SetResourceVersion(existing.GetResourceVersion())
+	return m.Client.Update(ctx, route)
+}
+
+// AddToManager registers the ResourceManager as a manager Runnable.
+func (m *ResourceManager) AddToManager(mgr manager.Manager) error {
+	return mgr.Add(m)
+}
