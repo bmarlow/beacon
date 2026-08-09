@@ -131,6 +131,30 @@ A **Gateway** is then:
 > Only a Gateway that is **Unhealthy** and whose IP is **sourced from MetalLB**
 > is eligible for withdrawal.
 
+#### Skupper-linked (remote) backends
+
+A backend Service may actually be a **Skupper `Listener`** — the real workload
+runs on a **remote cluster** reached over a Skupper link. Such a Service has no
+local workload pods; its endpoints point at the local `skupper-router` (which is
+always healthy locally), so local pod probes cannot see a remote failure.
+
+Beacon detects these backends via the `internal.skupper.io/listener` label
+Skupper stamps on the Service, and evaluates the **Listener's status** instead of
+local pods:
+
+- Listener **`Ready`** (a matching remote `Connector` exists, link operational)
+  → the remote backend is **healthy**.
+- Listener not ready (e.g. `status: Pending`, *"No matching connectors"* — the
+  remote workload is down/scaled to zero) → the remote backend is **unhealthy**.
+
+This folds into the Gateway's aggregate health exactly like a local probed pod,
+so the **same dampening + proxy-drain withdraw/re-advertise** behavior applies:
+if the remote workload fails, the Gateway's VIP is withdrawn; when it recovers,
+the VIP is re-advertised. The dashboard shows such backends as
+**Service (Skupper)** with a 🔗 link-status indicator and a synthetic *Remote*
+leaf. (Requires read access to `skupper.io/listeners`; clusters without Skupper
+are unaffected.)
+
 ### Withdrawing without flapping BGP (proxy-drain)
 
 This is the core safety property, and it works **with** MetalLB's design rather
@@ -632,6 +656,7 @@ Source layout:
 | `internal/trace/`           | Gateway → xRoutes → backend Service → EndpointSlice → backend Pod resolution (VIP from proxy Service). |
 | `internal/health/`          | Probe-based health evaluation and exemption rules.        |
 | `internal/metallb/`         | Minimal MetalLB CR types + IP/pool matching.              |
+| `internal/skupper/`         | Skupper Listener detection + remote-backend health evaluation. |
 | `internal/advertiser/`      | Proxy-drain withdraw/restore logic (scale proxy Deployment; BGP-safe). |
 | `internal/policy/`          | Exemption, class filtering, timer-override resolution.    |
 | `internal/controller/`      | The reconciler and dampening state machine.               |
