@@ -46,12 +46,33 @@ import (
 
 const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
 
+// Authorizer decides whether the requesting user may read a given resource.
+// Implemented by webui.AccessChecker (SubjectAccessReview-backed). When nil,
+// all resources are visible (auth disabled).
+type Authorizer interface {
+	// Allowed reports whether the user may perform verb on the resource
+	// identified by group/resource/namespace/name. namespace is "" for
+	// cluster-scoped resources.
+	Allowed(ctx context.Context, verb, group, resource, namespace, name string) bool
+}
+
 // Builder assembles the topology Graph from cluster state plus live controller
 // state (advertisement decisions) from the shared store.
 type Builder struct {
 	Client     client.Client
 	States     *state.Store
 	PolicyName string
+	// Authz, when set, filters the graph to only the resources the requesting
+	// user can read. Nil means no filtering (unauthenticated/local mode).
+	Authz Authorizer
+}
+
+// canRead is a nil-safe helper that returns true when no authorizer is set.
+func (b *Builder) canRead(ctx context.Context, verb, group, resource, namespace, name string) bool {
+	if b.Authz == nil {
+		return true
+	}
+	return b.Authz.Allowed(ctx, verb, group, resource, namespace, name)
 }
 
 // routeInfo is an intermediate normalized route with its backend service refs.
@@ -109,6 +130,10 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 
 	for i := range gwList.Items {
 		gw := &gwList.Items[i]
+		// Hide Gateways the requesting user cannot read.
+		if !b.canRead(ctx, "get", "gateway.networking.k8s.io", "gateways", gw.Namespace, gw.Name) {
+			continue
+		}
 		node := b.buildGatewayNode(ctx, gw, spec, routesByGateway, snaps)
 		gatewayNodes = append(gatewayNodes, node)
 	}
@@ -118,6 +143,10 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 	var poolOrder []string
 	for i := range poolList.Items {
 		p := &poolList.Items[i]
+		// Hide pools the requesting user cannot read.
+		if !b.canRead(ctx, "get", "metallb.io", "ipaddresspools", p.Namespace, p.Name) {
+			continue
+		}
 		pn := &PoolNode{
 			Name:       p.Name,
 			Namespace:  p.Namespace,
@@ -141,6 +170,11 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 				continue
 			}
 			pn := poolNodesByName[pool.Name]
+			if pn == nil {
+				// The pool exists but is hidden from this user (RBAC), so the
+				// Gateway can't be shown under it. Treat as unpooled.
+				continue
+			}
 			key := pool.Name + "/" + ip
 			ipn := ipNodeIndex[key]
 			if ipn == nil {
@@ -279,6 +313,10 @@ func (b *Builder) buildGatewayNode(
 	routes := routesByGateway[key]
 	sort.Slice(routes, func(i, j int) bool { return routes[i].name < routes[j].name })
 	for _, ri := range routes {
+		// Hide routes the user cannot read.
+		if !b.canRead(ctx, "get", "gateway.networking.k8s.io", routePlural(ri.kind), ri.namespace, ri.name) {
+			continue
+		}
 		rn := RouteNode{
 			Kind:      ri.kind,
 			Name:      ri.name,
@@ -287,6 +325,10 @@ func (b *Builder) buildGatewayNode(
 			Ref:       routeRef(ri.kind, ri.namespace, ri.name),
 		}
 		for _, bref := range ri.backends {
+			// Hide backend Services the user cannot read.
+			if !b.canRead(ctx, "get", "", "services", bref.Namespace, bref.Name) {
+				continue
+			}
 			svc := &corev1.Service{}
 			if err := b.Client.Get(ctx, bref, svc); err != nil {
 				continue
@@ -297,6 +339,10 @@ func (b *Builder) buildGatewayNode(
 			}
 			pods := b.podsForService(ctx, svc)
 			for pi := range pods {
+				// Hide pods the user cannot read.
+				if !b.canRead(ctx, "get", "", "pods", pods[pi].Namespace, pods[pi].Name) {
+					continue
+				}
 				eval := health.EvaluatePod(&pods[pi])
 				pn := PodNode{
 					Name:      pods[pi].Name,
@@ -711,4 +757,21 @@ func routeRef(kind, namespace, name string) *Ref {
 
 func poolRef(namespace, name string) *Ref {
 	return &Ref{Group: "metallb.io", Version: "v1beta1", Kind: "IPAddressPool", Namespace: namespace, Name: name}
+}
+
+// routePlural maps an xRoute Kind to its resource plural for authorization
+// checks (SubjectAccessReview ResourceAttributes.Resource).
+func routePlural(kind string) string {
+	switch kind {
+	case "HTTPRoute":
+		return "httproutes"
+	case "GRPCRoute":
+		return "grpcroutes"
+	case "TCPRoute":
+		return "tcproutes"
+	case "TLSRoute":
+		return "tlsroutes"
+	default:
+		return ""
+	}
 }

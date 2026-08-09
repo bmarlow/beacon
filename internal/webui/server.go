@@ -47,11 +47,16 @@ type Server struct {
 	Client     client.Client
 	States     *state.Store
 	PolicyName string
+	// RequireAuth, when true, expects an authenticating reverse proxy
+	// (OpenShift oauth-proxy) in front and enforces per-user RBAC filtering via
+	// SubjectAccessReviews using the forwarded user identity. When false, the
+	// dashboard is unauthenticated and shows everything (local/dev mode).
+	RequireAuth bool
 }
 
 // NewServer constructs a Server.
-func NewServer(addr string, c client.Client, states *state.Store, policyName string) *Server {
-	return &Server{Addr: addr, Client: c, States: states, PolicyName: policyName}
+func NewServer(addr string, c client.Client, states *state.Store, policyName string, requireAuth bool) *Server {
+	return &Server{Addr: addr, Client: c, States: states, PolicyName: policyName, RequireAuth: requireAuth}
 }
 
 // Start implements manager.Runnable so the manager owns the HTTP server
@@ -97,7 +102,7 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) NeedLeaderElection() bool { return false }
 
 func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
 	builder := &topology.Builder{
@@ -105,6 +110,18 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		States:     s.States,
 		PolicyName: s.PolicyName,
 	}
+
+	// When auth is required, derive the user from the oauth-proxy forwarded
+	// headers and filter the graph to what that user can read.
+	if s.RequireAuth {
+		user, ok := userFromRequest(r)
+		if !ok {
+			http.Error(w, "unauthorized: missing forwarded user identity", http.StatusUnauthorized)
+			return
+		}
+		builder.Authz = NewAccessChecker(s.Client, user)
+	}
+
 	graph, err := builder.Build(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

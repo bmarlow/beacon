@@ -358,3 +358,76 @@ func TestBuild_RefsPopulated(t *testing.T) {
 		t.Fatalf("pod ref wrong: %+v", pd.Ref)
 	}
 }
+
+// fakeAuthz allows only resources in an allow-list; everything else hidden.
+type fakeAuthz struct{ allow map[string]bool }
+
+func (f *fakeAuthz) Allowed(_ context.Context, verb, group, resource, namespace, name string) bool {
+	return f.allow[group+"/"+resource+"/"+namespace+"/"+name]
+}
+
+func TestBuild_RBACFiltering(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gwA := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-a", Namespace: "team-a"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.10"}}},
+	}
+	gwB := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw-b", Namespace: "team-b"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.11"}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gwA, gwB).Build()
+
+	// User can read the pool and gw-a only (not gw-b).
+	az := &fakeAuthz{allow: map[string]bool{
+		"metallb.io/ipaddresspools/metallb-system/pool":  true,
+		"gateway.networking.k8s.io/gateways/team-a/gw-a": true,
+	}}
+	g, err := (&Builder{Client: cl, PolicyName: "cluster", Authz: az}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	// Collect visible gateway names.
+	var names []string
+	for _, p := range g.Pools {
+		for _, ip := range p.IPs {
+			for _, gw := range ip.Gateways {
+				names = append(names, gw.Name)
+			}
+		}
+	}
+	if len(names) != 1 || names[0] != "gw-a" {
+		t.Fatalf("expected only gw-a visible, got %v", names)
+	}
+}
+
+func TestBuild_RBACHidesPool(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.10"}}},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gw).Build()
+	// User cannot read the pool -> pool hidden; gateway can't be placed -> unpooled.
+	az := &fakeAuthz{allow: map[string]bool{
+		"gateway.networking.k8s.io/gateways/app/gw": true,
+	}}
+	g, err := (&Builder{Client: cl, PolicyName: "cluster", Authz: az}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(g.Pools) != 0 {
+		t.Fatalf("expected no pools visible, got %d", len(g.Pools))
+	}
+	if len(g.UnpooledGateways) != 1 {
+		t.Fatalf("expected gw in unpooled, got %d", len(g.UnpooledGateways))
+	}
+}

@@ -99,6 +99,9 @@ type gwState struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies/status,verbs=get;update;patch
 

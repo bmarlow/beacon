@@ -180,6 +180,15 @@ spec:
             - apiGroups: ["console.openshift.io"]
               resources: ["consolelinks"]
               verbs: ["get", "list", "watch", "create", "update", "patch"]
+            - apiGroups: ["authorization.k8s.io"]
+              resources: ["subjectaccessreviews"]
+              verbs: ["create"]
+            - apiGroups: ["authentication.k8s.io"]
+              resources: ["tokenreviews"]
+              verbs: ["create"]
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:
@@ -214,6 +223,13 @@ spec:
                   runAsNonRoot: true
                   seccompProfile:
                     type: RuntimeDefault
+                volumes:
+                  - name: dashboard-tls
+                    secret:
+                      secretName: beacon-dashboard-tls
+                  - name: dashboard-proxy-cookie
+                    secret:
+                      secretName: beacon-dashboard-proxy
                 containers:
                   - name: manager
                     image: ghcr.io/bmarlow/beacon@sha256:b83e51f2be2f0230a410f35ad5feb600a9d1ed928eec5d50e41ca4ee67b3c17c
@@ -223,16 +239,15 @@ spec:
                       - --health-probe-bind-address=:8081
                       - --metrics-bind-address=:8443
                       - --metrics-secure=true
-                      - --dashboard-bind-address=:8082
+                      # Dashboard binds to localhost only; it is reachable solely
+                      # through the oauth-proxy sidecar.
+                      - --dashboard-bind-address=127.0.0.1:8082
+                      - --dashboard-auth-required=true
                     env:
                       - name: POD_NAMESPACE
                         valueFrom:
                           fieldRef:
                             fieldPath: metadata.namespace
-                    ports:
-                      - name: dashboard
-                        containerPort: 8082
-                        protocol: TCP
                     securityContext:
                       allowPrivilegeEscalation: false
                       readOnlyRootFilesystem: true
@@ -257,4 +272,40 @@ spec:
                         memory: 64Mi
                       limits:
                         cpu: 500m
+                        memory: 128Mi
+                  # OpenShift OAuth proxy: authenticates dashboard users against
+                  # the cluster and forwards their identity to the dashboard.
+                  - name: oauth-proxy
+                    image: quay.io/openshift-release-dev/ocp-v4.0-art-dev@sha256:11193e695eb3d1de9d2929a863361f652ee54fc7eb505bcfbb6fb4a13373ad4e
+                    args:
+                      - --https-address=:9443
+                      - --provider=openshift
+                      - --openshift-service-account=beacon-controller-manager
+                      - --upstream=http://127.0.0.1:8082
+                      - --tls-cert=/etc/tls/private/tls.crt
+                      - --tls-key=/etc/tls/private/tls.key
+                      - --cookie-secret-file=/etc/proxy/secrets/session_secret
+                      - --pass-user-headers=true
+                      - --pass-access-token=false
+                    ports:
+                      - name: dashboard
+                        containerPort: 9443
+                        protocol: TCP
+                    volumeMounts:
+                      - name: dashboard-tls
+                        mountPath: /etc/tls/private
+                      - name: dashboard-proxy-cookie
+                        mountPath: /etc/proxy/secrets
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      runAsNonRoot: true
+                      capabilities:
+                        drop: ["ALL"]
+                    resources:
+                      requests:
+                        cpu: 10m
+                        memory: 64Mi
+                      limits:
+                        cpu: 200m
                         memory: 128Mi

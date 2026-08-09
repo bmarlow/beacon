@@ -62,6 +62,7 @@ func main() {
 	var secureMetrics bool
 	var policyName string
 	var dashboardAddr string
+	var dashboardAuthRequired bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
@@ -73,6 +74,10 @@ func main() {
 		"Name of the singleton GatewayHealthPolicy resource to load configuration from.")
 	flag.StringVar(&dashboardAddr, "dashboard-bind-address", ":8082",
 		"The address the topology dashboard (web UI) binds to. Set empty to disable.")
+	flag.BoolVar(&dashboardAuthRequired, "dashboard-auth-required", true,
+		"Require authentication (via an OpenShift oauth-proxy front-end) and enforce "+
+			"per-user RBAC on the dashboard. When true, the dashboard only serves the "+
+			"forwarded-user's identity and filters resources by SubjectAccessReview.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -122,7 +127,7 @@ func main() {
 
 	// Topology dashboard (read-only web UI). Runs on every replica.
 	if dashboardAddr != "" {
-		dash := webui.NewServer(dashboardAddr, mgr.GetClient(), stateStore, policyName)
+		dash := webui.NewServer(dashboardAddr, mgr.GetClient(), stateStore, policyName, dashboardAuthRequired)
 		if err := dash.AddToManager(mgr); err != nil {
 			setupLog.Error(err, "unable to register topology dashboard")
 			os.Exit(1)
@@ -130,7 +135,8 @@ func main() {
 		// The operator owns the dashboard Service and (on OpenShift) Route,
 		// creating them at startup. Leader-elected so only one replica acts.
 		port := dashboardPortFromAddr(dashboardAddr)
-		rm := webui.NewResourceManager(mgr.GetClient(), port)
+		const oauthProxyPort = int32(9443)
+		rm := webui.NewResourceManager(mgr.GetClient(), port, dashboardAuthRequired, oauthProxyPort)
 		if err := rm.AddToManager(mgr); err != nil {
 			setupLog.Error(err, "unable to register dashboard resource manager")
 			os.Exit(1)
