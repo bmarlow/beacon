@@ -1,12 +1,12 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: beacon.v0.1.5
+  name: beacon.v0.1.8
   namespace: placeholder
   annotations:
     capabilities: Seamless Upgrades
     categories: Networking
-    containerImage: ghcr.io/bmarlow/beacon@sha256:b83e51f2be2f0230a410f35ad5feb600a9d1ed928eec5d50e41ca4ee67b3c17c
+    containerImage: ghcr.io/bmarlow/beacon@sha256:91f1c4e10ce73b0ed4275f9639ca54c882eb27a36cafb54358f485b530a5fbcd
     createdAt: "2026-08-06T00:00:00Z"
     description: >-
       Beacon integrates Gateway API Gateway health with MetalLB BGP
@@ -72,8 +72,7 @@ spec:
     - networking
     - health
     - load-balancer
-  version: 0.1.5
-  replaces: beacon.v0.1.4
+  version: 0.1.8
   maturity: alpha
   minKubeVersion: 1.27.0
   provider:
@@ -189,6 +188,9 @@ spec:
             - apiGroups: [""]
               resources: ["secrets"]
               verbs: ["get", "list", "watch", "create", "update", "patch"]
+            - apiGroups: [""]
+              resources: ["serviceaccounts"]
+              verbs: ["get", "list", "watch", "update", "patch"]
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:
@@ -224,15 +226,22 @@ spec:
                   seccompProfile:
                     type: RuntimeDefault
                 volumes:
+                  # Optional so the pod can start before the operator (leader)
+                  # provisions these at runtime: the service-ca serving cert
+                  # (once the annotated Service exists) and the oauth-proxy
+                  # cookie Secret. The oauth-proxy container tolerates a brief
+                  # crash-loop until both appear, then serves normally.
                   - name: dashboard-tls
                     secret:
                       secretName: beacon-dashboard-tls
+                      optional: true
                   - name: dashboard-proxy-cookie
                     secret:
                       secretName: beacon-dashboard-proxy
+                      optional: true
                 containers:
                   - name: manager
-                    image: ghcr.io/bmarlow/beacon@sha256:b83e51f2be2f0230a410f35ad5feb600a9d1ed928eec5d50e41ca4ee67b3c17c
+                    image: ghcr.io/bmarlow/beacon@sha256:91f1c4e10ce73b0ed4275f9639ca54c882eb27a36cafb54358f485b530a5fbcd
                     command: ["/manager"]
                     args:
                       - --leader-elect
