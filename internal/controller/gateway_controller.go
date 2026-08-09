@@ -154,22 +154,27 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Evaluate health from local backend pods, then fold in Skupper-linked
-	// remote backends (their health comes from the Listener status). Each remote
-	// backend counts like a probed unit: unhealthy when the link is not ready.
-	result := health.Evaluate(resolution.Pods)
-	for _, rb := range resolution.RemoteBackends {
-		result.ProbedPods++
-		if !rb.Ready {
-			result.UnhealthyPods++
-		}
+	// Evaluate Gateway health per-backend-Service against the configured
+	// minimum-healthy-backend percentage (default 100 = any counted backend
+	// down withdraws). Skupper-linked backends are already folded into
+	// ServiceHealths.
+	threshold := int(policy.MinHealthyBackendPercent(gw, spec))
+	decision := health.EvaluateGateway(resolution.ServiceHealths, threshold)
+	current := beaconv1alpha1.HealthExempt
+	switch {
+	case decision.Exempt:
+		current = beaconv1alpha1.HealthExempt
+	case decision.Unhealthy:
+		current = beaconv1alpha1.HealthUnhealthy
+	default:
+		current = beaconv1alpha1.HealthHealthy
 	}
-	current := aggregateHealth(result)
 	logger.V(1).Info("evaluated health",
 		"health", current,
-		"totalPods", result.TotalPods,
-		"probedPods", result.ProbedPods,
-		"unhealthyPods", result.UnhealthyPods,
+		"countedBackends", decision.Counted,
+		"healthyBackends", decision.Healthy,
+		"healthyPercent", decision.HealthyPercent,
+		"threshold", threshold,
 		"remoteBackends", len(resolution.RemoteBackends),
 		"ips", resolution.IPs,
 		"fromMetalLB", fromMetalLB,

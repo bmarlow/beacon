@@ -22,6 +22,7 @@ Gateway VIPs pointed only at healthy backends.
 - [How it works](#how-it-works)
   - [Tracing a Gateway to its pods](#tracing-a-gateway-to-its-pods)
   - [Health rules](#health-rules)
+  - [Multiple backend services per Gateway](#multiple-backend-services-per-gateway)
   - [Withdrawing without flapping BGP (proxy-drain)](#withdrawing-without-flapping-bgp-proxy-drain)
   - [Dampening state machine](#dampening-state-machine)
 - [Skupper-linked (remote) backends](#skupper-linked-remote-backends)
@@ -142,6 +143,46 @@ A **Gateway** is then:
 > cluster). Beacon health-checks those via the Skupper `Listener` status rather
 > than local pods — see [Skupper-linked (remote)
 > backends](#skupper-linked-remote-backends).
+
+### Multiple backend services per Gateway
+
+A Gateway can front more than one backend Service. By default, **if any backend
+service goes down, Beacon withdraws the Gateway's route** — i.e. all counted
+backends must be healthy.
+
+You can relax this with **`minHealthyBackendPercent`**: the minimum percentage of
+a Gateway's *counted* backend services that must be healthy for the route to stay
+advertised. It is evaluated **inclusively**:
+
+```
+stay advertised  while  (healthy backends / counted backends) * 100  >=  minHealthyBackendPercent
+withdraw         when   the ratio drops below the threshold
+```
+
+- **Counted** backends are those with a health signal — services with probed
+  pods, or Skupper-linked services. Probe-less/exempt services are excluded from
+  the ratio.
+- A backend service is **healthy** when all its probed pods are ready (or, for a
+  Skupper backend, the link is `Ready`).
+
+Example — `minHealthyBackendPercent: 50` on a Gateway with **4** backend
+services:
+
+| Backends down | Healthy % | Result |
+| ------------- | --------- | ------ |
+| 0 or 1        | 100% / 75% | advertised (Healthy / Degraded) |
+| 2             | **50%**    | advertised — 50% meets the inclusive 50% threshold (Degraded) |
+| 3             | 25%        | **withdrawn** (below 50%) |
+| 4             | 0%         | **withdrawn** |
+
+Set it globally in the policy (`spec.minHealthyBackendPercent`, default `100`) or
+per-Gateway via the `beacon.io/min-healthy-percent` annotation. The dashboard
+shows each Gateway's `backends healthy/counted (min N%)`. When the threshold is
+crossed, the usual dampening + proxy-drain withdraw/re-advertise applies.
+
+> **Note:** a Gateway that is **Degraded** (some backends down but still at/above
+> the threshold) remains **advertised**; only **Unhealthy** (below threshold)
+> triggers withdrawal.
 
 ### Withdrawing without flapping BGP (proxy-drain)
 
@@ -643,6 +684,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `withdrawAfter`                    | duration   | `5s`                   | Continuous-unhealthy time before withdrawing a route.                       |
 | `readvertiseAfter`                 | duration   | `30s`                  | Continuous-healthy time before restoring a route.                           |
 | `resyncInterval`                   | duration   | `10s`                  | Worst-case reconcile cadence between watch events.                          |
+| `minHealthyBackendPercent`         | int (0–100)| `100`                  | Min % of a Gateway's counted backend services that must be healthy to stay advertised (inclusive). 100 = any counted backend down withdraws. See [Multiple backends per Gateway](#multiple-backend-services-per-gateway). |
 | `paused`                           | bool       | `false`                | Observe-only mode; Beacon takes no withdraw/restore action.                 |
 | `gatewayClassNames`                | []string   | `[]` (all)             | Restrict management to these Gateway classes.                              |
 | `exemptions`                       | []ref      | `[]`                   | Gateways (namespace/name) to exclude.                                       |
@@ -655,6 +697,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `beacon.io/exempt`               | `"true"`   | Exempt this Gateway from all management.     |
 | `beacon.io/withdraw-after`       | duration   | Override `withdrawAfter` for this Gateway.   |
 | `beacon.io/readvertise-after`    | duration   | Override `readvertiseAfter` for this Gateway.|
+| `beacon.io/min-healthy-percent`  | int (0–100)| Override `minHealthyBackendPercent` for this Gateway. |
 
 ### Manager flags
 

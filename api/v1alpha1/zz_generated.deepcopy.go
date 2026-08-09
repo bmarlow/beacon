@@ -91,6 +91,11 @@ func (in *GatewayHealthPolicySpec) DeepCopyInto(out *GatewayHealthPolicySpec) {
 	out.ReadvertiseAfter = in.ReadvertiseAfter
 	out.ResyncInterval = in.ResyncInterval
 	out.MetalLB = in.MetalLB
+	if in.MinHealthyBackendPercent != nil {
+		in, out := &in.MinHealthyBackendPercent, &out.MinHealthyBackendPercent
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Exemptions != nil {
 		in, out := &in.Exemptions, &out.Exemptions
 		*out = make([]GatewayReference, len(*in))

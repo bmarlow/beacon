@@ -161,12 +161,18 @@ type GatewayNode struct {
 	ProxyService  *ServiceRef `json:"proxyService,omitempty"`
 	// ReplicasReady / ReplicasDesired report the Gateway's data-plane (proxy)
 	// Deployment replica counts (summed across proxy Deployments).
-	ReplicasReady   int32       `json:"replicasReady"`
-	ReplicasDesired int32       `json:"replicasDesired"`
-	Routes          []RouteNode `json:"routes"`
-	Status          Status      `json:"status"`
-	StatusTiming    `json:",inline"`
-	Ref             *Ref `json:"ref,omitempty"`
+	ReplicasReady   int32 `json:"replicasReady"`
+	ReplicasDesired int32 `json:"replicasDesired"`
+	// HealthyBackends / CountedBackends are the numerator / denominator of the
+	// min-healthy-backend-percentage evaluation. MinHealthyPercent is the
+	// effective threshold (inclusive) for this Gateway.
+	HealthyBackends   int32       `json:"healthyBackends"`
+	CountedBackends   int32       `json:"countedBackends"`
+	MinHealthyPercent int32       `json:"minHealthyPercent"`
+	Routes            []RouteNode `json:"routes"`
+	Status            Status      `json:"status"`
+	StatusTiming      `json:",inline"`
+	Ref               *Ref `json:"ref,omitempty"`
 	// Timer describes a running dampening timer (backoff/recovery), if any.
 	Timer *Timer `json:"timer,omitempty"`
 }

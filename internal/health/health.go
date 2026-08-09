@@ -68,6 +68,67 @@ func (r Result) Healthy() bool {
 	return r.ProbedPods > 0 && r.UnhealthyPods == 0
 }
 
+// ServiceHealth is the health of a single backend behind a Gateway, at the
+// Service granularity used for the minimum-healthy-backend-percentage decision.
+type ServiceHealth struct {
+	Namespace string
+	Name      string
+	// Counted indicates the backend has a health signal and participates in the
+	// percentage (probed pods, or a Skupper Listener). Probe-less/exempt
+	// backends are not counted.
+	Counted bool
+	// Healthy is meaningful only when Counted; true when the backend is up.
+	Healthy bool
+}
+
+// GatewayDecision is the aggregate outcome for a Gateway given its per-service
+// health and the configured minimum-healthy-backend percentage.
+type GatewayDecision struct {
+	// Counted / Healthy are the denominator / numerator of the ratio.
+	Counted int
+	Healthy int
+	// HealthyPercent is 100*Healthy/Counted (0 when Counted==0).
+	HealthyPercent int
+	// Threshold is the configured minimum healthy percentage (inclusive).
+	Threshold int
+	// Unhealthy is true when the Gateway should be withdrawn: it has at least
+	// one counted backend and the healthy ratio is strictly below Threshold.
+	Unhealthy bool
+	// Exempt is true when no backend is counted (nothing to health-check).
+	Exempt bool
+}
+
+// EvaluateGateway applies the minimum-healthy-backend-percentage rule to a set
+// of per-service health results.
+//
+// The Gateway stays advertised (not Unhealthy) while
+//
+//	100 * healthy / counted >= threshold   (inclusive)
+//
+// and is Unhealthy when the ratio drops below the threshold. With threshold=100
+// (the default) any single counted backend going down makes the Gateway
+// Unhealthy. When no backend is counted, the Gateway is Exempt.
+func EvaluateGateway(services []ServiceHealth, thresholdPercent int) GatewayDecision {
+	d := GatewayDecision{Threshold: thresholdPercent}
+	for _, s := range services {
+		if !s.Counted {
+			continue
+		}
+		d.Counted++
+		if s.Healthy {
+			d.Healthy++
+		}
+	}
+	if d.Counted == 0 {
+		d.Exempt = true
+		return d
+	}
+	d.HealthyPercent = (100 * d.Healthy) / d.Counted
+	// Inclusive: stay up while healthy% >= threshold; withdraw when below.
+	d.Unhealthy = d.HealthyPercent < thresholdPercent
+	return d
+}
+
 // PodHasProbes reports whether any container in the pod declares a readiness,
 // liveness, or startup probe. Init containers are ignored for this purpose
 // because they do not represent steady-state serving health.

@@ -226,6 +226,13 @@
     if (g.exempt) meta.push("exempt");
     // Proxy replica count (data-plane).
     meta.push("replicas " + (g.replicasReady || 0) + "/" + (g.replicasDesired || 0));
+    // Backend health ratio vs. the min-healthy threshold.
+    if (g.countedBackends && g.countedBackends > 0) {
+      meta.push(
+        "backends " + (g.healthyBackends || 0) + "/" + g.countedBackends +
+        " (min " + (g.minHealthyPercent != null ? g.minHealthyPercent : 100) + "%)"
+      );
+    }
     if (g.ips && g.ips.length) meta.push(g.ips.join(", "));
     return nodeRow({
       id: "gw/" + g.namespace + "/" + g.name,

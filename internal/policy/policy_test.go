@@ -80,3 +80,27 @@ func TestWithdrawAfter_Override(t *testing.T) {
 		t.Fatalf("expected 5s default, got %s", got)
 	}
 }
+
+func TestMinHealthyBackendPercent(t *testing.T) {
+	// default when unset
+	g := gw("ns", "a", nil, "cls")
+	spec := &beaconv1alpha1.GatewayHealthPolicySpec{}
+	if got := MinHealthyBackendPercent(g, spec); got != 100 {
+		t.Fatalf("expected default 100, got %d", got)
+	}
+	// policy value
+	v := int32(50)
+	spec.MinHealthyBackendPercent = &v
+	if got := MinHealthyBackendPercent(g, spec); got != 50 {
+		t.Fatalf("expected policy 50, got %d", got)
+	}
+	// annotation override (with % suffix + clamp)
+	g2 := gw("ns", "a", map[string]string{OverrideMinHealthyPercentAnnotation: "75%"}, "cls")
+	if got := MinHealthyBackendPercent(g2, spec); got != 75 {
+		t.Fatalf("expected annotation 75, got %d", got)
+	}
+	g3 := gw("ns", "a", map[string]string{OverrideMinHealthyPercentAnnotation: "250"}, "cls")
+	if got := MinHealthyBackendPercent(g3, spec); got != 100 {
+		t.Fatalf("expected clamp to 100, got %d", got)
+	}
+}

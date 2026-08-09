@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
@@ -170,9 +171,15 @@ func TestBuild_FullHierarchy(t *testing.T) {
 	if len(svc.Pods) != 2 {
 		t.Fatalf("expected 2 backend pods, got %d", len(svc.Pods))
 	}
-	// Degraded because one of two probed pods is failing.
-	if gn.Health != StatusDegraded {
-		t.Fatalf("expected gateway health Degraded, got %s", gn.Health)
+	// Health is per-Service: the single backend Service has a failing pod, so
+	// the service is down. With the default 100% threshold, 0/1 healthy
+	// backends => the Gateway is Unhealthy.
+	if gn.Health != StatusUnhealthy {
+		t.Fatalf("expected gateway health Unhealthy, got %s", gn.Health)
+	}
+	if gn.CountedBackends != 1 || gn.HealthyBackends != 0 || gn.MinHealthyPercent != 100 {
+		t.Fatalf("expected 0/1 backends at 100%%, got %d/%d min=%d",
+			gn.HealthyBackends, gn.CountedBackends, gn.MinHealthyPercent)
 	}
 
 	// Summary sanity.
@@ -506,5 +513,69 @@ func TestBuild_SkupperBackendUnhealthy(t *testing.T) {
 	}
 	if len(sn.Pods) != 1 || !sn.Pods[0].Remote || sn.Pods[0].Ready {
 		t.Fatalf("expected one unhealthy remote leaf, got %+v", sn.Pods)
+	}
+}
+
+// Threshold test: 2 backend services, one down, threshold 50% (via policy) ->
+// 50% healthy meets the inclusive threshold, so the Gateway stays up (Degraded).
+func TestBuild_ThresholdKeepsGatewayUp(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	min := int32(50)
+	pol := &beaconv1alpha1.GatewayHealthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Spec:       beaconv1alpha1.GatewayHealthPolicySpec{MinHealthyBackendPercent: &min},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.10"}}},
+	}
+	mkSvcPod := func(svcName, podName string, ready bool) []client.Object {
+		st := corev1.ConditionTrue
+		if !ready {
+			st = corev1.ConditionFalse
+		}
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: svcName, Namespace: "app"}}
+		pod := &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: podName, Namespace: "app"},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", ReadinessProbe: &corev1.Probe{}}}},
+			Status:     corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: st}}},
+		}
+		slice := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: svcName + "-1", Namespace: "app",
+				Labels: map[string]string{discoveryv1.LabelServiceName: svcName}},
+			Endpoints: []discoveryv1.Endpoint{{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: podName, Namespace: "app"}}},
+		}
+		return []client.Object{svc, pod, slice}
+	}
+	route := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}}},
+			Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{
+				{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc-up"}}},
+				{BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc-down"}}},
+			}}},
+		},
+	}
+	objs := []client.Object{pool, pol, gw, route}
+	objs = append(objs, mkSvcPod("svc-up", "pod-up", true)...)
+	objs = append(objs, mkSvcPod("svc-down", "pod-down", false)...)
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(objs...).Build()
+
+	g, err := (&Builder{Client: cl, PolicyName: "cluster"}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	gwn := g.Pools[0].IPs[0].Gateways[0]
+	if gwn.Health != StatusDegraded {
+		t.Fatalf("expected Degraded (50%% up meets 50%% threshold), got %s", gwn.Health)
+	}
+	if gwn.CountedBackends != 2 || gwn.HealthyBackends != 1 || gwn.MinHealthyPercent != 50 {
+		t.Fatalf("expected 1/2 backends at 50%%, got %d/%d min=%d",
+			gwn.HealthyBackends, gwn.CountedBackends, gwn.MinHealthyPercent)
 	}
 }

@@ -52,6 +52,28 @@ type GatewayHealthPolicySpec struct {
 	// +optional
 	ResyncInterval metav1.Duration `json:"resyncInterval,omitempty"`
 
+	// MinHealthyBackendPercent is the minimum percentage of a Gateway's counted
+	// backend services that must be healthy for the Gateway to remain
+	// advertised. It is evaluated inclusively: the Gateway stays up while
+	//
+	//	(healthy backends / counted backends) * 100 >= MinHealthyBackendPercent
+	//
+	// and is withdrawn when it drops below. "Counted" backends are those with a
+	// health signal — services with probed pods, or Skupper-linked services;
+	// probe-less/exempt services are excluded from the ratio.
+	//
+	// The default is 100, meaning any single counted backend going down
+	// withdraws the Gateway. Lower it to tolerate partial backend outages —
+	// e.g. 50 keeps a 4-backend Gateway up until 3 are down (2 up = 50% is
+	// still >= 50). May be overridden per-Gateway with the
+	// "beacon.io/min-healthy-percent" annotation.
+	//
+	// +kubebuilder:default=100
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	MinHealthyBackendPercent *int32 `json:"minHealthyBackendPercent,omitempty"`
+
 	// MetalLB configures how Beacon interacts with MetalLB advertisements.
 	// +optional
 	MetalLB MetalLBConfig `json:"metallb,omitempty"`

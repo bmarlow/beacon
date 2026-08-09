@@ -19,6 +19,8 @@ limitations under the License.
 package policy
 
 import (
+	"strconv"
+	"strings"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -39,6 +41,14 @@ const (
 	// OverrideReadvertiseAfterAnnotation lets a Gateway override the global
 	// readvertiseAfter timer, e.g. "beacon.io/readvertise-after: 60s".
 	OverrideReadvertiseAfterAnnotation = "beacon.io/readvertise-after"
+
+	// OverrideMinHealthyPercentAnnotation lets a Gateway override the global
+	// minHealthyBackendPercent threshold, e.g. "beacon.io/min-healthy-percent: 50".
+	OverrideMinHealthyPercentAnnotation = "beacon.io/min-healthy-percent"
+
+	// DefaultMinHealthyBackendPercent is used when neither the policy nor an
+	// annotation specifies one: 100% (any counted backend down withdraws).
+	DefaultMinHealthyBackendPercent int32 = 100
 )
 
 // IsExempt reports whether a Gateway is exempt from Beacon management, honoring
@@ -89,6 +99,32 @@ func ReadvertiseAfter(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPol
 		return d
 	}
 	return spec.ReadvertiseAfter
+}
+
+// MinHealthyBackendPercent returns the effective minimum-healthy-backend
+// percentage threshold for a Gateway: the per-Gateway annotation override if
+// present and valid, else the policy value, else the default (100). The result
+// is clamped to [0, 100].
+func MinHealthyBackendPercent(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPolicySpec) int32 {
+	if v, ok := gw.Annotations[OverrideMinHealthyPercentAnnotation]; ok && v != "" {
+		if n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), "%")); err == nil {
+			return clampPercent(int32(n))
+		}
+	}
+	if spec.MinHealthyBackendPercent != nil {
+		return clampPercent(*spec.MinHealthyBackendPercent)
+	}
+	return DefaultMinHealthyBackendPercent
+}
+
+func clampPercent(n int32) int32 {
+	if n < 0 {
+		return 0
+	}
+	if n > 100 {
+		return 100
+	}
+	return n
 }
 
 func parseDurationAnnotation(gw *gwapiv1.Gateway, key string) (metav1.Duration, bool) {

@@ -342,7 +342,8 @@ func (b *Builder) buildGatewayNode(
 	}
 
 	// Routes -> backend services -> pods.
-	var allProbed, allUnhealthy int
+	// Collect per-Service health for the minimum-healthy-backend-percentage rule.
+	var svcHealths []health.ServiceHealth
 	routes := routesByGateway[key]
 	sort.Slice(routes, func(i, j int) bool { return routes[i].name < routes[j].name })
 	for _, ri := range routes {
@@ -394,10 +395,9 @@ func (b *Builder) buildGatewayNode(
 				} else {
 					remote.Status = StatusUnhealthy
 				}
-				allProbed++
-				if !sh.Ready {
-					allUnhealthy++
-				}
+				svcHealths = append(svcHealths, health.ServiceHealth{
+					Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
+				})
 				sn.Pods = append(sn.Pods, remote)
 				sn.Status = worstPodStatus(sn.Pods)
 				rn.Services = append(rn.Services, sn)
@@ -405,6 +405,7 @@ func (b *Builder) buildGatewayNode(
 			}
 
 			pods := b.podsForService(ctx, svc)
+			svcProbed, svcUnhealthy := 0, 0
 			for pi := range pods {
 				// Hide pods the user cannot read.
 				if !b.canRead(ctx, "get", "", "pods", pods[pi].Namespace, pods[pi].Name) {
@@ -424,13 +425,18 @@ func (b *Builder) buildGatewayNode(
 				}
 				pn.StatusTiming = podStatusTiming(&pods[pi])
 				if eval.Probed {
-					allProbed++
+					svcProbed++
 					if !eval.Ready {
-						allUnhealthy++
+						svcUnhealthy++
 					}
 				}
 				sn.Pods = append(sn.Pods, pn)
 			}
+			svcHealths = append(svcHealths, health.ServiceHealth{
+				Namespace: svc.Namespace, Name: svc.Name,
+				Counted: svcProbed > 0,
+				Healthy: svcProbed > 0 && svcUnhealthy == 0,
+			})
 			sn.Status = worstPodStatus(sn.Pods)
 			// A Service's "time in status" is the most recent of its pods'
 			// status transitions (the last time its aggregate could have changed).
@@ -442,16 +448,22 @@ func (b *Builder) buildGatewayNode(
 		node.Routes = append(node.Routes, rn)
 	}
 
-	// Aggregate Gateway health from backend pods.
+	// Aggregate Gateway health per-Service against the min-healthy-backend
+	// percentage threshold (default 100). Below threshold => Unhealthy (VIP
+	// withdrawn); at/above threshold but with some counted backend down =>
+	// Degraded (still advertised); all healthy => Healthy.
+	threshold := int(policy.MinHealthyBackendPercent(gw, spec))
+	node.MinHealthyPercent = int32(threshold)
+	decision := health.EvaluateGateway(svcHealths, threshold)
+	node.HealthyBackends = int32(decision.Healthy)
+	node.CountedBackends = int32(decision.Counted)
 	switch {
-	case node.Exempt:
+	case node.Exempt || decision.Exempt:
 		node.Health = StatusExempt
-	case allProbed == 0:
-		node.Health = StatusExempt
-	case allUnhealthy == 0:
-		node.Health = StatusHealthy
-	case allUnhealthy == allProbed:
+	case decision.Unhealthy:
 		node.Health = StatusUnhealthy
+	case decision.Healthy == decision.Counted:
+		node.Health = StatusHealthy
 	default:
 		node.Health = StatusDegraded
 	}

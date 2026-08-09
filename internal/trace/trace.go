@@ -57,6 +57,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
+	"github.com/bmarlow/beacon/internal/health"
 	"github.com/bmarlow/beacon/internal/skupper"
 )
 
@@ -82,6 +83,11 @@ type GatewayResolution struct {
 	// remote cluster). Their health comes from the Skupper Listener status, not
 	// local pods, and is folded into the Gateway's aggregate health.
 	RemoteBackends []RemoteBackend
+
+	// ServiceHealths is the per-backend-Service health used by the
+	// minimum-healthy-backend-percentage decision (one entry per backend
+	// Service, local or Skupper).
+	ServiceHealths []health.ServiceHealth
 }
 
 // RemoteBackend is a Skupper Listener-backed backend Service.
@@ -143,6 +149,7 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayRe
 
 	// 3. Trace each backend Service to its Pods (the pods we health-check).
 	//    Skupper-backed Services are evaluated via their Listener instead.
+	//    Also compute per-Service health for the minimum-healthy-percentage rule.
 	seen := map[types.NamespacedName]struct{}{}
 	for i := range backendSvcs {
 		svc := &backendSvcs[i]
@@ -152,6 +159,10 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayRe
 				Namespace: svc.Namespace, Name: svc.Name,
 				Listener: lname, Ready: sh.Ready, Reason: sh.Reason,
 			})
+			// A Skupper backend always counts; healthy iff the link is ready.
+			res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
+				Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
+			})
 			continue
 		}
 		pods, err := r.podsForService(ctx, &backendSvcs[i])
@@ -159,6 +170,14 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayRe
 			return nil, fmt.Errorf("finding pods for backend service %s/%s: %w",
 				backendSvcs[i].Namespace, backendSvcs[i].Name, err)
 		}
+		// Per-service health: counted iff it has at least one probed pod;
+		// healthy iff counted and no probed pod is failing.
+		svcRes := health.Evaluate(pods)
+		res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
+			Namespace: svc.Namespace, Name: svc.Name,
+			Counted: svcRes.ProbedPods > 0,
+			Healthy: svcRes.ProbedPods > 0 && svcRes.UnhealthyPods == 0,
+		})
 		for j := range pods {
 			key := types.NamespacedName{Namespace: pods[j].Namespace, Name: pods[j].Name}
 			if _, ok := seen[key]; ok {

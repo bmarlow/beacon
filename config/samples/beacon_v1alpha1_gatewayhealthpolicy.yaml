@@ -12,6 +12,12 @@ spec:
   readvertiseAfter: 30s
   # Worst-case reconcile cadence when no watch event fires.
   resyncInterval: 10s
+  # Minimum percent of a Gateway's counted backend services that must be healthy
+  # for the Gateway to stay advertised (inclusive). 100 (default) = any counted
+  # backend down withdraws the route. Lower to tolerate partial outages, e.g. 50
+  # keeps a 4-backend Gateway up until 3 are down. Override per-Gateway with the
+  # beacon.io/min-healthy-percent annotation.
+  minHealthyBackendPercent: 100
   # Set true to observe-only (no MetalLB mutations); useful for maintenance.
   paused: false
 
