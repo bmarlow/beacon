@@ -36,6 +36,8 @@ Gateway VIPs pointed only at healthy backends.
   - [Per-gateway timer overrides](#per-gateway-timer-overrides)
   - [Pausing the operator](#pausing-the-operator)
 - [Topology dashboard (web UI)](#topology-dashboard-web-ui)
+  - [Authentication & per-user access](#authentication--per-user-access)
+  - [Finding the dashboard](#finding-the-dashboard)
 - [Observability](#observability)
 - [Configuration reference](#configuration-reference)
 - [Architecture](#architecture)
@@ -243,39 +245,47 @@ rather than `latest`.
 
 ## Installation
 
+Beacon installs via **OLM** (recommended, so it appears under the console's
+Installed Operators and manages its own lifecycle) or directly with kustomize.
+
 ### Install via OLM (OperatorHub)
 
-Once published to a catalog, install through the OpenShift console
-(**Operators → OperatorHub → Beacon**) or with a `Subscription`:
+If Beacon is published to a catalog, install through the console
+(**Operators → OperatorHub → Beacon**) or with a `Subscription`.
 
-```yaml
-apiVersion: operators.coreos.com/v1alpha1
-kind: Subscription
-metadata:
-  name: beacon
-  namespace: openshift-operators
-spec:
-  channel: stable
-  name: beacon
-  source: community-operators
-  sourceNamespace: openshift-marketplace
-```
-
-To build and push the bundle yourself:
+To install the bundle directly (what the reference deployment uses), build/push
+the bundle and run it into the `beacon` namespace:
 
 ```bash
-make bundle IMG=ghcr.io/<you>/beacon:latest VERSION=0.1.0
+# Build & push the bundle image (the operator image is built by CI on ghcr.io).
+make bundle VERSION=0.1.0
 make bundle-build bundle-push BUNDLE_IMG=ghcr.io/<you>/beacon-bundle:0.1.0
-operator-sdk run bundle ghcr.io/<you>/beacon-bundle:0.1.0
+
+# Install via OLM (creates the OperatorGroup, CatalogSource, Subscription, CSV).
+oc create namespace beacon
+operator-sdk run bundle ghcr.io/<you>/beacon-bundle:0.1.0 \
+  --namespace beacon --install-mode AllNamespaces
+
+# Create the singleton policy.
+kubectl apply -f config/samples/beacon_v1alpha1_gatewayhealthpolicy.yaml
 ```
 
+> The operator requires **AllNamespaces** install mode (its CRD is
+> cluster-scoped and it holds cluster-wide permissions). It creates its own
+> dashboard `Service`, `Route`, `ConsoleLink`, and oauth-proxy auth resources at
+> startup — no extra manifests needed.
+
 ### Install with kustomize
+
+For non-OLM clusters (or development). Note the kustomize path deploys the
+manager only; the oauth-proxy sidecar and dashboard wiring are fully specified
+in the OLM CSV, so **for the authenticated dashboard use the OLM install**.
 
 ```bash
 # Install the CRD.
 make install
 
-# Deploy the controller (namespace beacon-system).
+# Deploy the controller (config/default -> namespace beacon-system).
 make deploy IMG=ghcr.io/<you>/beacon:latest
 
 # Create the singleton policy.
@@ -420,96 +430,107 @@ and report health/intended state but performs **no** MetalLB mutations.
 
 ## Topology dashboard (web UI)
 
-> **Operator status URL.** Once deployed and exposed via its OpenShift `Route`,
-> the live status dashboard is available at:
->
-> ```
-> https://<route-host>/
-> ```
->
-> Discover the host with:
->
-> ```bash
-> oc -n <beacon-namespace> get route beacon-dashboard -o jsonpath='https://{.spec.host}/{"\n"}'
-> ```
->
-> On the reference deployment (namespace `beacon` on the testcluster) this is:
->
-> ```
-> https://beacon-dashboard-beacon.apps.testcluster.labgear.io/
-> ```
->
-> Machine-readable status is at `GET <route-host>/api/topology`.
-
-Beacon serves a built-in, read-only web dashboard that renders the full
-relationship chain **from the MetalLB IP all the way down to the app/service
-pod**, with live status at every level:
+Beacon serves a built-in web dashboard that renders the full relationship chain
+**from the MetalLB IP all the way down to the app/service pod**, with live status
+at every level:
 
 ```
-IPAddressPool (MetalLB)
-  └─ VIP  (Advertised / Withdrawn / Pending)
-       └─ Gateway            (health + advertisement)
-            └─ Route          (HTTP/GRPC/TCP/TLS, hostnames)
-                 └─ Service    (backend)
-                      └─ Pod   (phase, probe status, node)
+IPAddressPool (MetalLB)          [name, CIDRs; time-in-status]
+  └─ VIP  (Advertised / Withdrawn / Pending; time-in-status)
+       └─ Gateway                (health, advertisement, class, replicas R/D,
+            │                      dampening timer countdown, time-in-status)
+            └─ Route             (HTTP/GRPC/TCP/TLS, hostnames)
+                 └─ Service       (backend)
+                      └─ Pod      (phase, probe status, node, time-in-status)
 ```
 
-Each node is color-coded (Healthy / Degraded / Unhealthy / Withdrawn / Pending /
-Exempt / Unknown), the tree is collapsible, and the page auto-refreshes every 5s.
-A header summarizes pool/gateway/route/service/pod counts and advertised vs.
-withdrawn IPs.
+Highlights:
+
+- Each node is **color-coded** (Healthy / Degraded / Unhealthy / Withdrawn /
+  Pending / Exempt / Unknown); the tree is collapsible and auto-refreshes.
+- Every component name is a **clickable link to its OpenShift console page**
+  (opens in a new tab) when you have access to that object.
+- Each node shows **how long it has been in its current status** (e.g. `for
+  3m12s`).
+- Gateway rows show the proxy **replica count** (`replicas R/D`) and, when a
+  dampening timer is running, a live **countdown** — `backoff 2s / 5s (3s left)`
+  or `recovery 12s / 30s (18s left)`.
+- The header shows the **operator version**, aggregate counts, the **logged-in
+  user**, and a **Log out** button.
+
+### Authentication & per-user access
+
+The dashboard is **authenticated by default** using OpenShift's OAuth. An
+`oauth-proxy` sidecar (in the operator pod) fronts the UI: unauthenticated
+requests are redirected to the OpenShift login, and only the authenticated
+user's identity reaches the dashboard.
+
+Access is then **filtered per user** — you see only the resources you have RBAC
+read access to:
+
+- The dashboard runs a `SubjectAccessReview` for each node ("can this user `get`
+  this Gateway / Route / Service / Pod / IPAddressPool?") and **hides** what you
+  can't read.
+- **Cluster-admins see everything.**
+- **You do not need MetalLB-namespace access** to see the pool/VIP context for
+  your own Gateways: a pool is shown whenever it backs a Gateway you can see. In
+  that case it is marked **restricted** (🔒) and rendered without a console link,
+  so no additional MetalLB detail is exposed. Pools you can read directly are
+  shown fully (and empty ones appear too).
+- **Log out** clears your session (via the proxy's `/oauth/sign_out`).
+
+Auth can be disabled for local/dev only with `--dashboard-auth-required=false`
+(the dashboard then serves everything unauthenticated — do not use in
+production).
+
+### Finding the dashboard
+
+Three easy ways, in order of convenience:
+
+1. **Application Launcher** — the operator publishes an OpenShift `ConsoleLink`,
+   so **"Beacon Dashboard"** appears under the grid/9-dots menu (top-right of
+   every console page), section *Observability*.
+2. **Installed Operators** — on the Beacon operator's details page, under
+   **Links → Topology Dashboard**.
+3. **Directly via the Route**:
+
+   ```bash
+   oc -n <beacon-namespace> get route beacon-dashboard \
+     -o jsonpath='https://{.spec.host}/{"\n"}'
+   ```
+
+Machine-readable status is at `GET <route-host>/api/topology` (also
+authenticated and RBAC-filtered).
+
+> **The dashboard's Service, Route, and ConsoleLink are created and owned by the
+> operator at startup** — you do not apply them yourself. On OpenShift the Route
+> is `reencrypt` (TLS to the oauth-proxy via a service-serving cert). On
+> non-OpenShift clusters the Route/ConsoleLink are skipped automatically.
 
 ### Endpoints
 
-The dashboard is served by the manager on `--dashboard-bind-address` (default
-`:8082`):
+The manager serves the dashboard on `--dashboard-bind-address` (default
+`127.0.0.1:8082` when auth is enabled; reached only through the oauth-proxy on
+`:9443`):
 
-| Path             | Description                                  |
-| ---------------- | -------------------------------------------- |
-| `/`              | The HTML dashboard.                          |
-| `/api/topology`  | The full topology graph as JSON.             |
-| `/healthz`       | Dashboard liveness.                          |
-
-The JSON API is handy for scripting/alerting, e.g.:
-
-```bash
-# Use the namespace Beacon is deployed into (beacon-system by default, beacon on the testcluster).
-kubectl -n beacon port-forward deploy/beacon-controller-manager 8082:8082
-curl -s localhost:8082/api/topology | jq '.summary'
-```
-
-### Accessing on OpenShift
-
-The kustomize config creates a `Service` (`beacon-dashboard`) and an
-edge-terminated `Route` (`beacon-dashboard`) in the operator's namespace. Get the
-status URL and open it:
-
-```bash
-# Replace with the namespace Beacon is deployed into (e.g. beacon or beacon-system).
-oc -n beacon get route beacon-dashboard -o jsonpath='https://{.spec.host}/{"\n"}'
-# open the printed URL in a browser
-```
-
-The default kustomize overlay (`config/default`) deploys to `beacon-system`; the
-testcluster overlay (`config/deploy-testcluster`) deploys to `beacon`.
-
-> The dashboard is **read-only** (it never mutates cluster state), but it does
-> expose topology/health information. In production, protect it — e.g. front it
-> with the OpenShift OAuth proxy, restrict the Route, or drop the Route and rely
-> on `port-forward`. Set `--dashboard-bind-address=""` to disable the UI
-> entirely.
+| Path              | Description                                   |
+| ----------------- | --------------------------------------------- |
+| `/`               | The HTML dashboard.                           |
+| `/api/topology`   | The topology graph as JSON (RBAC-filtered).   |
+| `/healthz`        | Dashboard liveness.                           |
+| `/oauth/sign_out` | Log out (provided by the oauth-proxy sidecar).|
 
 ### How status is derived
 
 The dashboard reads live cluster objects (pools, gateways, routes, services,
 endpointslices, pods, and the Gateway proxy `Deployment`s) through the manager's
-cache. The advertisement state is derived from **ground truth** — whether the
-Gateway's proxy `Deployment` is scaled to zero (`Withdrawn`) or running
-(`Advertised`) — so it is consistent on every replica and survives controller
-restarts. The controller's in-memory state is used only to surface the transient
-`PendingWithdrawal` / `PendingReadvertise` states while a dampening timer is
-running. Pod health uses the exact same probe rules as the reconciler
-(probe-less pods are `Exempt`).
+cache, then applies the per-user RBAC filter described above. Advertisement
+state is derived from **ground truth** — whether the Gateway's proxy
+`Deployment` is scaled to zero (`Withdrawn`) or running (`Advertised`) — plus the
+policy's shared status for the transient `PendingWithdrawal` /
+`PendingReadvertise` states and timer countdowns, so the view is consistent on
+every replica and survives controller restarts. Pod health uses the exact same
+probe rules as the reconciler (probe-less pods are `Exempt`).
 
 ---
 
@@ -517,7 +538,9 @@ running. Pod health uses the exact same probe rules as the reconciler
 
 - **Status dashboard/URL**: the topology dashboard (see above) is the primary
   status surface — `https://<route-host>/` for the UI and
-  `https://<route-host>/api/topology` for JSON.
+  `https://<route-host>/api/topology` for JSON (both authenticated and
+  RBAC-filtered). Find it via the console Application Launcher ("Beacon
+  Dashboard") or the operator's Links.
 - **Events**: Beacon emits `Withdrawn` (Warning) and `Readvertised` (Normal)
   events on the affected Gateway, including the IP(s) and the elapsed timer.
 - **Status**: `GatewayHealthPolicy.status` aggregates counts of managed
@@ -554,6 +577,21 @@ running. Pod health uses the exact same probe rules as the reconciler
 | `beacon.io/exempt`               | `"true"`   | Exempt this Gateway from all management.     |
 | `beacon.io/withdraw-after`       | duration   | Override `withdrawAfter` for this Gateway.   |
 | `beacon.io/readvertise-after`    | duration   | Override `readvertiseAfter` for this Gateway.|
+
+### Manager flags
+
+| Flag                          | Default            | Description                                                        |
+| ----------------------------- | ------------------ | ----------------------------------------------------------------- |
+| `--policy-name`               | `cluster`          | Name of the singleton `GatewayHealthPolicy` to load config from.  |
+| `--dashboard-bind-address`    | `:8082`            | Address the dashboard binds to (set empty to disable the UI).     |
+| `--dashboard-auth-required`   | `true`             | Require OpenShift OAuth + per-user RBAC filtering for the dashboard. |
+| `--leader-elect`              | `false`†           | Enable leader election (the shipped deployment sets this true).    |
+| `--metrics-bind-address`      | `:8443`            | Metrics endpoint (HTTPS; HTTP/2 disabled).                        |
+| `--health-probe-bind-address` | `:8081`            | Health/readiness probe endpoint.                                  |
+
+† The deployed manifests/CSV run with `--leader-elect` and
+`--dashboard-auth-required=true`; the flag defaults above are the binary's
+built-in defaults.
 
 ---
 
@@ -598,10 +636,11 @@ Source layout:
 | `internal/policy/`          | Exemption, class filtering, timer-override resolution.    |
 | `internal/controller/`      | The reconciler and dampening state machine.               |
 | `internal/state/`           | Thread-safe store of live advertisement/health state shared with the UI. |
-| `internal/topology/`        | Builds the hierarchical, status-annotated topology graph.  |
-| `internal/webui/`           | HTTP server + embedded HTML/CSS/JS topology dashboard.     |
+| `internal/topology/`        | Builds the hierarchical, status-annotated topology graph (incl. per-user RBAC filtering). |
+| `internal/webui/`           | Dashboard HTTP server, SubjectAccessReview authorizer, and startup provisioning of the dashboard Service/Route/ConsoleLink + oauth-proxy resources. |
+| `internal/version/`         | Operator build version (stamped at build time via ldflags). |
 | `cmd/main.go`               | Manager entrypoint.                                       |
-| `config/`                   | CRDs, RBAC, manager deployment, dashboard Service/Route (kustomize). |
+| `config/`                   | CRDs, RBAC, manager deployment (kustomize).               |
 | `bundle/`                   | OLM bundle (CSV + metadata) for OperatorHub.              |
 
 ---
