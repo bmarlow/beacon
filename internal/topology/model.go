@@ -211,8 +211,23 @@ type ServiceNode struct {
 	Port         string `json:"port,omitempty"`
 	Status       Status `json:"status"`
 	StatusTiming `json:",inline"`
-	Ref          *Ref      `json:"ref,omitempty"`
-	Pods         []PodNode `json:"pods"`
+	Ref          *Ref `json:"ref,omitempty"`
+	// Skupper, when set, indicates this backend is a Skupper Listener whose real
+	// workload lives on a remote cluster over a Skupper link. Health comes from
+	// the Listener status rather than local pods.
+	Skupper *SkupperInfo `json:"skupper,omitempty"`
+	Pods    []PodNode    `json:"pods"`
+}
+
+// SkupperInfo describes a Skupper-linked (remote) backend.
+type SkupperInfo struct {
+	// ListenerName is the Skupper Listener backing this Service.
+	ListenerName string `json:"listenerName"`
+	// Ready is true when a matching remote Connector exists and the link is
+	// operational (the remote workload is reachable/healthy).
+	Ready bool `json:"ready"`
+	// Reason is a short explanation from the Listener status.
+	Reason string `json:"reason,omitempty"`
 }
 
 // PodNode is a backend workload Pod with its probe-derived health.
@@ -228,4 +243,7 @@ type PodNode struct {
 	StatusTiming `json:",inline"`
 	Ref          *Ref   `json:"ref,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// Remote marks a synthetic leaf representing a Skupper-linked remote
+	// workload (no local pod object).
+	Remote bool `json:"remote,omitempty"`
 }

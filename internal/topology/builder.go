@@ -40,6 +40,7 @@ import (
 	"github.com/bmarlow/beacon/internal/health"
 	"github.com/bmarlow/beacon/internal/metallb"
 	"github.com/bmarlow/beacon/internal/policy"
+	"github.com/bmarlow/beacon/internal/skupper"
 	"github.com/bmarlow/beacon/internal/state"
 	"github.com/bmarlow/beacon/internal/version"
 )
@@ -369,6 +370,40 @@ func (b *Builder) buildGatewayNode(
 				Name: svc.Name, Namespace: svc.Namespace, Type: string(svc.Spec.Type),
 				Ref: svcConsoleRef(svc.Namespace, svc.Name),
 			}
+
+			// Skupper-backed backend: the real workload is on a remote cluster
+			// over a Skupper link. Evaluate the Listener status instead of local
+			// pods (whose endpoints are the skupper-router, not the workload).
+			if lname, ok := skupper.ServiceListenerName(svc.Labels); ok {
+				sh := skupper.EvaluateListener(ctx, b.Client, svc.Namespace, lname)
+				sn.Skupper = &SkupperInfo{ListenerName: lname, Ready: sh.Ready, Reason: sh.Reason}
+				// Represent the remote workload as a single synthetic leaf so it
+				// shows in the tree and counts toward Gateway health exactly like
+				// a probed local pod.
+				remote := PodNode{
+					Name:      "remote: " + lname,
+					Namespace: svc.Namespace,
+					Phase:     "Remote (Skupper)",
+					Probed:    true,
+					Ready:     sh.Ready,
+					Reason:    sh.Reason,
+					Remote:    true,
+				}
+				if sh.Ready {
+					remote.Status = StatusHealthy
+				} else {
+					remote.Status = StatusUnhealthy
+				}
+				allProbed++
+				if !sh.Ready {
+					allUnhealthy++
+				}
+				sn.Pods = append(sn.Pods, remote)
+				sn.Status = worstPodStatus(sn.Pods)
+				rn.Services = append(rn.Services, sn)
+				continue
+			}
+
 			pods := b.podsForService(ctx, svc)
 			for pi := range pods {
 				// Hide pods the user cannot read.

@@ -157,13 +157,19 @@
   function podNode(p) {
     const meta = [p.phase];
     if (p.node) meta.push("@" + p.node);
-    if (!p.probed) meta.push("no probes");
-    else meta.push(p.ready ? "ready" : "not ready");
+    if (p.remote) {
+      meta.push(p.ready ? "link ready" : "link down");
+      if (p.reason) meta.push(p.reason);
+    } else if (!p.probed) {
+      meta.push("no probes");
+    } else {
+      meta.push(p.ready ? "ready" : "not ready");
+    }
     return nodeRow({
       id: "pod/" + p.namespace + "/" + p.name,
-      kind: "Pod",
+      kind: p.remote ? "Remote" : "Pod",
       name: p.name,
-      ns: p.namespace,
+      ns: p.remote ? "" : p.namespace,
       meta: meta.join(" \u00b7 "),
       status: p.status,
       statusForSeconds: p.statusForSeconds,
@@ -173,12 +179,22 @@
 
   function serviceNode(s) {
     const kids = (s.pods || []).map(podNode);
+    let meta;
+    if (s.skupper) {
+      meta =
+        "\u{1F517} Skupper link \u00b7 listener=" +
+        s.skupper.listenerName +
+        " \u00b7 " +
+        (s.skupper.ready ? "remote ready" : "remote unavailable");
+    } else {
+      meta = (s.type || "") + (s.pods ? " \u00b7 " + s.pods.length + " pod(s)" : "");
+    }
     return nodeRow({
       id: "svc/" + s.namespace + "/" + s.name,
-      kind: "Service",
+      kind: s.skupper ? "Service (Skupper)" : "Service",
       name: s.name,
       ns: s.namespace,
-      meta: (s.type || "") + (s.pods ? " \u00b7 " + s.pods.length + " pod(s)" : ""),
+      meta: meta,
       status: s.status,
       statusForSeconds: s.statusForSeconds,
       ref: s.ref,

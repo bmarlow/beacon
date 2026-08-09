@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -34,6 +35,7 @@ import (
 
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/metallb"
+	"github.com/bmarlow/beacon/internal/skupper"
 	"github.com/bmarlow/beacon/internal/state"
 )
 
@@ -442,5 +444,67 @@ func TestBuild_RestrictedPoolStillShownForContext(t *testing.T) {
 	}
 	if len(g.UnpooledGateways) != 0 {
 		t.Fatalf("expected no unpooled gateways, got %d", len(g.UnpooledGateways))
+	}
+}
+
+func TestBuild_SkupperBackendUnhealthy(t *testing.T) {
+	s := scheme(t)
+	// Register the Skupper Listener GVK (unstructured) in the test scheme.
+	s.AddKnownTypeWithName(skupper.ListenerGVK, &unstructured.Unstructured{})
+	ll := skupper.ListenerGVK
+	ll.Kind = "ListenerList"
+	s.AddKnownTypeWithName(ll, &unstructured.UnstructuredList{})
+
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "beta"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.30"}}},
+	}
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	// Backend Service is Skupper-backed (listener label), selector -> router.
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "beta-workload", Namespace: "beta",
+			Labels: map[string]string{skupper.ListenerLabel: "beta-workload"},
+		},
+	}
+	// Listener reports "No matching connectors" (remote down).
+	lst := &unstructured.Unstructured{}
+	lst.SetGroupVersionKind(skupper.ListenerGVK)
+	lst.SetNamespace("beta")
+	lst.SetName("beta-workload")
+	_ = unstructured.SetNestedField(lst.Object, "Pending", "status", "status")
+	_ = unstructured.SetNestedField(lst.Object, "No matching connectors", "status", "message")
+	_ = unstructured.SetNestedSlice(lst.Object, []interface{}{
+		map[string]interface{}{"type": "Ready", "status": "False", "message": "No matching connectors"},
+	}, "status", "conditions")
+
+	route := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "beta"},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}}},
+			Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{{
+				BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "beta-workload"}},
+			}}}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(gw, pool, svc, lst, route).Build()
+
+	g, err := (&Builder{Client: cl, PolicyName: "cluster"}).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	gwn := g.Pools[0].IPs[0].Gateways[0]
+	if gwn.Health != StatusUnhealthy {
+		t.Fatalf("expected gateway Unhealthy due to failed Skupper link, got %s", gwn.Health)
+	}
+	sn := gwn.Routes[0].Services[0]
+	if sn.Skupper == nil || sn.Skupper.Ready {
+		t.Fatalf("expected skupper info with Ready=false, got %+v", sn.Skupper)
+	}
+	if len(sn.Pods) != 1 || !sn.Pods[0].Remote || sn.Pods[0].Ready {
+		t.Fatalf("expected one unhealthy remote leaf, got %+v", sn.Pods)
 	}
 }

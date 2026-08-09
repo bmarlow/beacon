@@ -56,6 +56,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+
+	"github.com/bmarlow/beacon/internal/skupper"
 )
 
 // GatewayResolution is the outcome of tracing a Gateway.
@@ -75,6 +77,20 @@ type GatewayResolution struct {
 	// Pods are the deduplicated BACKEND workload Pods whose probes are
 	// evaluated for health.
 	Pods []corev1.Pod
+
+	// RemoteBackends are Skupper-linked backends (the real workload lives on a
+	// remote cluster). Their health comes from the Skupper Listener status, not
+	// local pods, and is folded into the Gateway's aggregate health.
+	RemoteBackends []RemoteBackend
+}
+
+// RemoteBackend is a Skupper Listener-backed backend Service.
+type RemoteBackend struct {
+	Namespace string
+	Name      string
+	Listener  string
+	Ready     bool
+	Reason    string
 }
 
 // Services returns the Services on which Beacon toggles the MetalLB
@@ -126,8 +142,18 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayRe
 	res.BackendServices = backendSvcs
 
 	// 3. Trace each backend Service to its Pods (the pods we health-check).
+	//    Skupper-backed Services are evaluated via their Listener instead.
 	seen := map[types.NamespacedName]struct{}{}
 	for i := range backendSvcs {
+		svc := &backendSvcs[i]
+		if lname, ok := skupper.ServiceListenerName(svc.Labels); ok {
+			sh := skupper.EvaluateListener(ctx, r.Client, svc.Namespace, lname)
+			res.RemoteBackends = append(res.RemoteBackends, RemoteBackend{
+				Namespace: svc.Namespace, Name: svc.Name,
+				Listener: lname, Ready: sh.Ready, Reason: sh.Reason,
+			})
+			continue
+		}
 		pods, err := r.podsForService(ctx, &backendSvcs[i])
 		if err != nil {
 			return nil, fmt.Errorf("finding pods for backend service %s/%s: %w",

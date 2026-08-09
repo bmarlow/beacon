@@ -103,6 +103,14 @@ rules:
       - list
       - watch
   - apiGroups:
+      - skupper.io
+    resources:
+      - listeners
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
       - config.openshift.io
     resources:
       - consoles

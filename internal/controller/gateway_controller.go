@@ -96,6 +96,7 @@ type gwState struct {
 // +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;list;watch
+// +kubebuilder:rbac:groups=skupper.io,resources=listeners,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch
@@ -153,14 +154,23 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// Evaluate health.
+	// Evaluate health from local backend pods, then fold in Skupper-linked
+	// remote backends (their health comes from the Listener status). Each remote
+	// backend counts like a probed unit: unhealthy when the link is not ready.
 	result := health.Evaluate(resolution.Pods)
+	for _, rb := range resolution.RemoteBackends {
+		result.ProbedPods++
+		if !rb.Ready {
+			result.UnhealthyPods++
+		}
+	}
 	current := aggregateHealth(result)
 	logger.V(1).Info("evaluated health",
 		"health", current,
 		"totalPods", result.TotalPods,
 		"probedPods", result.ProbedPods,
 		"unhealthyPods", result.UnhealthyPods,
+		"remoteBackends", len(resolution.RemoteBackends),
 		"ips", resolution.IPs,
 		"fromMetalLB", fromMetalLB,
 	)

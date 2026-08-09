@@ -1,12 +1,12 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: beacon.v0.1.9
+  name: beacon.v0.1.10
   namespace: placeholder
   annotations:
     capabilities: Seamless Upgrades
     categories: Networking
-    containerImage: ghcr.io/bmarlow/beacon@sha256:91983fa1dcf39b79c5beafb0f9de7aad0c730395e3e6c29748f7c0bc22e06e61
+    containerImage: ghcr.io/bmarlow/beacon@sha256:63c8f13d2963a74628388d8edd7521cd9e3676a3a85ea8c870ba60a3e4795075
     createdAt: "2026-08-06T00:00:00Z"
     description: >-
       Beacon integrates Gateway API Gateway health with MetalLB BGP
@@ -72,8 +72,8 @@ spec:
     - networking
     - health
     - load-balancer
-  version: 0.1.9
-  replaces: beacon.v0.1.8
+  version: 0.1.10
+  replaces: beacon.v0.1.9
   maturity: alpha
   minKubeVersion: 1.27.0
   provider:
@@ -171,6 +171,9 @@ spec:
             - apiGroups: ["metallb.io"]
               resources: ["ipaddresspools"]
               verbs: ["get", "list", "watch"]
+            - apiGroups: ["skupper.io"]
+              resources: ["listeners"]
+              verbs: ["get", "list", "watch"]
             - apiGroups: ["config.openshift.io"]
               resources: ["consoles"]
               verbs: ["get", "list", "watch"]
@@ -242,7 +245,7 @@ spec:
                       optional: true
                 containers:
                   - name: manager
-                    image: ghcr.io/bmarlow/beacon@sha256:91983fa1dcf39b79c5beafb0f9de7aad0c730395e3e6c29748f7c0bc22e06e61
+                    image: ghcr.io/bmarlow/beacon@sha256:63c8f13d2963a74628388d8edd7521cd9e3676a3a85ea8c870ba60a3e4795075
                     command: ["/manager"]
                     args:
                       - --leader-elect
