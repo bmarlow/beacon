@@ -4,32 +4,46 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Beacon &mdash; Gateway / MetalLB Topology</title>
+  <!-- Red Hat brand fonts (Red Hat Display for headings, Red Hat Text for body). -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Red+Hat+Display:wght@500;700;900&family=Red+Hat+Text:wght@400;500;700&family=Red+Hat+Mono:wght@400;500&display=swap"
+    rel="stylesheet" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
-      <span class="logo">&#9678;</span>
-      <div>
-        <h1>Beacon <span id="version" class="version" title="Operator version"></span></h1>
-        <p class="tagline">MetalLB &rarr; Gateway API &rarr; Workload topology</p>
+  <!-- Masthead (Red Hat black bar with the red brand accent). -->
+  <header class="rh-masthead">
+    <div class="rh-brand">
+      <img class="rh-logo" src="beacon-logo.png" alt="Beacon" width="36" height="36" />
+      <div class="rh-title">
+        <span class="rh-product">Beacon <span id="version" class="version" title="Operator version"></span></span>
+        <span class="rh-subtitle">Gateway API &middot; MetalLB topology &amp; health</span>
       </div>
     </div>
+    <div class="rh-masthead-actions">
+      <span id="user" class="user" title="Signed in user"></span>
+      <a id="logoutBtn" class="rh-btn rh-btn--secondary" href="oauth/sign_out" title="Log out">Log out</a>
+    </div>
+  </header>
+
+  <!-- Toolbar: summary stats + controls. -->
+  <section class="toolbar">
     <div class="summary" id="summary"></div>
     <div class="controls">
       <label class="auto">
         <input type="checkbox" id="autoRefresh" checked /> Auto-refresh
       </label>
-      <button id="refreshBtn" title="Refresh now">&#8635; Refresh</button>
-      <button id="expandBtn" title="Expand all">Expand all</button>
-      <button id="collapseBtn" title="Collapse all">Collapse all</button>
-      <span id="user" class="user"></span>
-      <a id="logoutBtn" class="logout" href="oauth/sign_out" title="Log out">Log out</a>
+      <button id="refreshBtn" class="rh-btn rh-btn--secondary" title="Refresh now">&#8635; Refresh</button>
+      <button id="expandBtn" class="rh-btn rh-btn--link" title="Expand all">Expand all</button>
+      <button id="collapseBtn" class="rh-btn rh-btn--link" title="Collapse all">Collapse all</button>
       <span id="updated" class="updated"></span>
     </div>
-  </header>
+  </section>
 
   <div class="legend" id="legend">
+    <span class="legend-label">Status</span>
     <span class="chip s-Healthy">Healthy</span>
     <span class="chip s-Degraded">Degraded</span>
     <span class="chip s-Unhealthy">Unhealthy</span>
@@ -43,7 +57,8 @@
     <div class="loading">Loading topology&hellip;</div>
   </main>
 
-  <footer class="footer">
+  <footer class="rh-footer">
+    <span class="rh-footer-brand">Beacon &mdash; a Red Hat&reg; OpenShift&reg; operator</span>
     <span id="err" class="err"></span>
   </footer>
 
