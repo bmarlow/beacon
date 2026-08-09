@@ -68,6 +68,18 @@ spec:
                   type: string
                   default: "10s"
                   description: Maximum period between full reconciliations.
+                minHealthyBackendPercent:
+                  type: integer
+                  format: int32
+                  default: 100
+                  minimum: 0
+                  maximum: 100
+                  description: |-
+                    Minimum percentage of a Gateway's counted backend services
+                    that must be healthy for the Gateway to remain advertised
+                    (inclusive). Default 100 = any counted backend down
+                    withdraws. Override per-Gateway with the
+                    beacon.io/min-healthy-percent annotation.
                 paused:
                   type: boolean
                   default: false
