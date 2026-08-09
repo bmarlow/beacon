@@ -24,6 +24,7 @@ Gateway VIPs pointed only at healthy backends.
   - [Health rules](#health-rules)
   - [Withdrawing without flapping BGP (proxy-drain)](#withdrawing-without-flapping-bgp-proxy-drain)
   - [Dampening state machine](#dampening-state-machine)
+- [Skupper-linked (remote) backends](#skupper-linked-remote-backends)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
   - [Install via OLM (OperatorHub)](#install-via-olm-operatorhub)
@@ -65,6 +66,9 @@ Beacon closes that gap for **Gateway API** Gateways specifically:
 - It restores the route once the workload recovers.
 - It never bounces the BGP session, so unrelated prefixes and neighbors are
   unaffected.
+- It also covers **Skupper-linked backends** — if the real workload lives on a
+  remote cluster, Beacon reacts to that remote workload's health too (see
+  [Skupper-linked (remote) backends](#skupper-linked-remote-backends)).
 
 ---
 
@@ -100,6 +104,9 @@ Beacon monitors the **backend pods**. For every `Gateway` it:
    (core `Service` kind, including cross-namespace refs).
 5. **Traces each backend Service to its pods** via `EndpointSlice`s (falling
    back to the Service selector), then inspects each pod's containers' probes.
+   If a backend is a **Skupper Listener** (a remote, off-cluster workload),
+   Beacon evaluates the Listener's status instead — see [Skupper-linked (remote)
+   backends](#skupper-linked-remote-backends).
 
 The full chain:
 
@@ -131,29 +138,10 @@ A **Gateway** is then:
 > Only a Gateway that is **Unhealthy** and whose IP is **sourced from MetalLB**
 > is eligible for withdrawal.
 
-#### Skupper-linked (remote) backends
-
-A backend Service may actually be a **Skupper `Listener`** — the real workload
-runs on a **remote cluster** reached over a Skupper link. Such a Service has no
-local workload pods; its endpoints point at the local `skupper-router` (which is
-always healthy locally), so local pod probes cannot see a remote failure.
-
-Beacon detects these backends via the `internal.skupper.io/listener` label
-Skupper stamps on the Service, and evaluates the **Listener's status** instead of
-local pods:
-
-- Listener **`Ready`** (a matching remote `Connector` exists, link operational)
-  → the remote backend is **healthy**.
-- Listener not ready (e.g. `status: Pending`, *"No matching connectors"* — the
-  remote workload is down/scaled to zero) → the remote backend is **unhealthy**.
-
-This folds into the Gateway's aggregate health exactly like a local probed pod,
-so the **same dampening + proxy-drain withdraw/re-advertise** behavior applies:
-if the remote workload fails, the Gateway's VIP is withdrawn; when it recovers,
-the VIP is re-advertised. The dashboard shows such backends as
-**Service (Skupper)** with a 🔗 link-status indicator and a synthetic *Remote*
-leaf. (Requires read access to `skupper.io/listeners`; clusters without Skupper
-are unaffected.)
+> A backend can also be a **Skupper-linked remote workload** (running on another
+> cluster). Beacon health-checks those via the Skupper `Listener` status rather
+> than local pods — see [Skupper-linked (remote)
+> backends](#skupper-linked-remote-backends).
 
 ### Withdrawing without flapping BGP (proxy-drain)
 
@@ -233,6 +221,68 @@ withdraw, slow to restore) favors traffic correctness while damping oscillation.
 
 ---
 
+## Skupper-linked (remote) backends
+
+Beacon understands backends whose real workload lives on **another cluster**,
+reached over a [Skupper](https://skupper.io/) link. This lets a Gateway VIP be
+withdrawn when the *remote* workload fails — the same way it would for a local
+one.
+
+### Why this needs special handling
+
+A Skupper `Listener` creates a **local Service** for the remote workload, but
+that Service's endpoints point at the local **`skupper-router`** pod, not the
+remote application. The router is essentially always healthy locally, so:
+
+- ordinary pod-probe tracing sees "endpoints exist, router is Ready" and would
+  consider the backend healthy, and
+- a failure on the remote cluster (crash, scale-to-zero, broken link) would
+  **never** be reflected in the VIP's advertisement.
+
+### How Beacon detects and evaluates them
+
+Beacon recognizes a Skupper-backed Service by the label Skupper stamps on it:
+
+```
+internal.skupper.io/listener: <listener-name>
+```
+
+For such a Service it evaluates the **Skupper `Listener`'s status** (in the
+Service's namespace) instead of local pods:
+
+| Listener state | Meaning | Beacon treats backend as |
+| -------------- | ------- | ------------------------ |
+| `status: Ready` / `Ready=True` (a matching remote `Connector` exists, link operational) | remote workload reachable | **Healthy** |
+| `status: Pending` / `Ready=False`, e.g. *"No matching connectors"* (remote workload down, scaled to zero, or link broken) | remote workload unavailable | **Unhealthy** |
+| Listener object missing | can't resolve the remote backend | **Unhealthy** (fail-safe) |
+| Skupper CRDs not installed | not a Skupper cluster | ignored (never marks unhealthy) |
+
+The result folds into the Gateway's aggregate health **exactly like a local
+probed pod**, so the standard behavior applies unchanged:
+
+- remote workload fails → after `withdrawAfter`, Beacon drains the Gateway's
+  proxy and MetalLB **withdraws** the VIP;
+- remote workload recovers → after `readvertiseAfter`, Beacon restores the proxy
+  and MetalLB **re-advertises** the VIP.
+
+### In the dashboard
+
+Skupper-backed backends render as **Service (Skupper)** with a 🔗 link-status
+indicator (`remote ready` / `remote unavailable`) and a synthetic **Remote**
+leaf standing in for the off-cluster workload (there is no local pod to show).
+
+### Requirements & notes
+
+- The operator needs read access to `skupper.io/listeners` (granted by the
+  bundle RBAC). Clusters without Skupper are unaffected — the check is skipped
+  when the CRD is absent.
+- Tested against **Skupper v2** (`skupper.io/v2alpha1` `Listener`). The Gateway,
+  MetalLB, and dampening requirements are otherwise identical to local backends.
+- Only the `Listener`-side (this cluster consuming a remote service) is
+  evaluated; Beacon does not need to run on, or reach, the remote cluster.
+
+---
+
 ## Prerequisites
 
 - OpenShift 4.14+ (or Kubernetes 1.27+).
@@ -242,6 +292,10 @@ withdraw, slow to restore) favors traffic correctness while damping oscillation.
   Operator on OpenShift), with `IPAddressPool` and `BGPPeer` configured. Beacon
   supports **BGP mode only** — L2 (ARP/NDP) mode is out of scope (see
   [FAQ](#faq--troubleshooting)).
+- *(Optional)* [Skupper](https://skupper.io/) v2 (`skupper.io/v2alpha1`) if any
+  Gateway backends are remote services reached over a Skupper link — see
+  [Skupper-linked (remote) backends](#skupper-linked-remote-backends). Not
+  required otherwise.
 
 ---
 
@@ -722,6 +776,15 @@ to trigger MetalLB's native withdrawal.
 Withdrawal is **whole-Gateway** by design (the lever is the shared proxy
 Deployment). If a Gateway fronts multiple backends/VIPs and you need per-route
 granularity, split them across separate Gateways (one Gateway per VIP).
+
+**A Skupper-linked backend is failing on the remote cluster but the VIP stays up.**
+Check that (a) the backend Service carries the `internal.skupper.io/listener`
+label (that's how Beacon recognizes it as Skupper-backed), (b) the
+`skupper.io/v2alpha1` `Listener` exists in that namespace and its status reflects
+the failure (e.g. `status: Pending`, *"No matching connectors"*), and (c) the
+operator can read `skupper.io/listeners`. When the Listener is `Ready` again,
+Beacon re-advertises after `readvertiseAfter`. See
+[Skupper-linked (remote) backends](#skupper-linked-remote-backends).
 
 **Why is a healthy Gateway still showing `PendingReadvertise`?**
 It's inside the `readvertiseAfter` dampening window. Once the workload has been
