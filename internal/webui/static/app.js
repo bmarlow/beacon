@@ -130,7 +130,11 @@
     }
     row.appendChild(nameEl);
     if (opts.ns) row.appendChild(el("span", "ns", opts.ns));
-    if (opts.meta) row.appendChild(el("span", "meta", opts.meta));
+    if (opts.meta) {
+      const metaEl = el("span", "meta", opts.meta);
+      if (opts.metaTitle) metaEl.title = opts.metaTitle;
+      row.appendChild(metaEl);
+    }
     row.appendChild(el("span", "spacer"));
     if (opts.timer) row.appendChild(timerChip(opts.timer));
     if (opts.adv) row.appendChild(el("span", "adv", opts.adv));
@@ -239,12 +243,17 @@
 
   function poolNode(p) {
     const kids = (p.ips || []).map(ipNode);
+    const meta = [(p.addresses || []).join(", ")];
+    if (p.restricted) meta.push("\u{1F512} restricted");
     return nodeRow({
       id: "pool/" + p.name,
       kind: "IPAddressPool",
       name: p.name,
       ns: p.namespace,
-      meta: (p.addresses || []).join(", "),
+      meta: meta.filter(Boolean).join(" \u00b7 "),
+      metaTitle: p.restricted
+        ? "You do not have read access to this MetalLB pool; it is shown for context because it backs a Gateway you can see."
+        : "",
       status: p.status,
       statusForSeconds: p.statusForSeconds,
       ref: p.ref,
@@ -279,6 +288,16 @@
     consoleBase = (graph.consoleBaseURL || "").replace(/\/$/, "");
     const verEl = document.getElementById("version");
     if (verEl) verEl.textContent = graph.operatorVersion ? "v" + graph.operatorVersion.replace(/^v/, "") : "";
+    // Show the authenticated user and the logout button only when auth is on.
+    const userEl = document.getElementById("user");
+    const logoutEl = document.getElementById("logoutBtn");
+    if (graph.user) {
+      if (userEl) userEl.textContent = graph.user;
+      if (logoutEl) logoutEl.style.display = "";
+    } else {
+      if (userEl) userEl.textContent = "";
+      if (logoutEl) logoutEl.style.display = "none";
+    }
     renderSummary(graph.summary || {});
     treeEl.innerHTML = "";
 

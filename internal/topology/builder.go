@@ -139,23 +139,37 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 	}
 
 	// Group Gateways under the pool that owns their IP.
+	//
+	// A pool is shown to the user if and only if it backs at least one Gateway
+	// the user can already see. We do NOT require the user to have read access
+	// to the IPAddressPool itself — the pool/VIP is contextual metadata about a
+	// Gateway they already own, and hiding it would collapse the whole
+	// hierarchy for users who lack access to the MetalLB namespace (the common
+	// case). Pools the user cannot directly read are marked Restricted and are
+	// not rendered as clickable console links.
 	poolNodesByName := map[string]*PoolNode{}
 	var poolOrder []string
-	for i := range poolList.Items {
-		p := &poolList.Items[i]
-		// Hide pools the requesting user cannot read.
-		if !b.canRead(ctx, "get", "metallb.io", "ipaddresspools", p.Namespace, p.Name) {
-			continue
+	poolCanRead := map[string]bool{}
+
+	ensurePoolNode := func(p *metallb.IPAddressPool) *PoolNode {
+		if pn, ok := poolNodesByName[p.Name]; ok {
+			return pn
 		}
+		canRead := b.canRead(ctx, "get", "metallb.io", "ipaddresspools", p.Namespace, p.Name)
+		poolCanRead[p.Name] = canRead
 		pn := &PoolNode{
 			Name:       p.Name,
 			Namespace:  p.Namespace,
 			Addresses:  append([]string(nil), p.Spec.Addresses...),
 			AutoAssign: p.Spec.AutoAssign,
-			Ref:        poolRef(p.Namespace, p.Name),
+			Restricted: !canRead,
+		}
+		if canRead {
+			pn.Ref = poolRef(p.Namespace, p.Name)
 		}
 		poolNodesByName[p.Name] = pn
 		poolOrder = append(poolOrder, p.Name)
+		return pn
 	}
 
 	// IP -> IPNode within a pool, keyed by "pool/ip".
@@ -169,12 +183,8 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 			if pool == nil {
 				continue
 			}
-			pn := poolNodesByName[pool.Name]
-			if pn == nil {
-				// The pool exists but is hidden from this user (RBAC), so the
-				// Gateway can't be shown under it. Treat as unpooled.
-				continue
-			}
+			// Create/reuse the pool node on demand, driven by visible gateways.
+			pn := ensurePoolNode(pool)
 			key := pool.Name + "/" + ip
 			ipn := ipNodeIndex[key]
 			if ipn == nil {
@@ -217,8 +227,30 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 		pn.StatusTiming = latestChildTiming(ipT)
 	}
 
-	// Emit pools in stable order, skipping pools with no Gateways (still show
-	// them so operators can see empty pools).
+	// Additionally show pools the user CAN read directly even if they back no
+	// visible Gateway (e.g. empty pools for admins/metallb readers). Users who
+	// cannot read a pool only see it when it backs one of their Gateways (added
+	// on demand above), so no extra MetalLB detail leaks.
+	for i := range poolList.Items {
+		p := &poolList.Items[i]
+		if _, exists := poolNodesByName[p.Name]; exists {
+			continue
+		}
+		if b.canRead(ctx, "get", "metallb.io", "ipaddresspools", p.Namespace, p.Name) {
+			pn := &PoolNode{
+				Name:       p.Name,
+				Namespace:  p.Namespace,
+				Addresses:  append([]string(nil), p.Spec.Addresses...),
+				AutoAssign: p.Spec.AutoAssign,
+				Ref:        poolRef(p.Namespace, p.Name),
+				Status:     StatusUnknown,
+			}
+			poolNodesByName[p.Name] = pn
+			poolOrder = append(poolOrder, p.Name)
+		}
+	}
+
+	// Emit pools in stable order.
 	for _, name := range poolOrder {
 		g.Pools = append(g.Pools, *poolNodesByName[name])
 	}

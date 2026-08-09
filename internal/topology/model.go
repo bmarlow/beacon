@@ -64,6 +64,10 @@ type Graph struct {
 	// build per-resource console links. Empty when not on OpenShift / unknown.
 	ConsoleBaseURL string `json:"consoleBaseURL,omitempty"`
 
+	// User is the authenticated username the graph was rendered for (empty when
+	// auth is disabled). Displayed in the header.
+	User string `json:"user,omitempty"`
+
 	// MetalLBNamespace is the namespace the pools were read from.
 	MetalLBNamespace string `json:"metallbNamespace"`
 
@@ -117,11 +121,15 @@ type StatusTiming struct {
 
 // PoolNode is a MetalLB IPAddressPool and the VIPs allocated from it.
 type PoolNode struct {
-	Name         string   `json:"name"`
-	Namespace    string   `json:"namespace"`
-	Addresses    []string `json:"addresses"`
-	AutoAssign   *bool    `json:"autoAssign,omitempty"`
-	Status       Status   `json:"status"`
+	Name       string   `json:"name"`
+	Namespace  string   `json:"namespace"`
+	Addresses  []string `json:"addresses"`
+	AutoAssign *bool    `json:"autoAssign,omitempty"`
+	// Restricted is true when the pool is shown for context (it backs a Gateway
+	// the user can see) but the user cannot directly read the IPAddressPool.
+	// The UI renders such pools without a clickable console link.
+	Restricted   bool   `json:"restricted,omitempty"`
+	Status       Status `json:"status"`
 	StatusTiming `json:",inline"`
 	Ref          *Ref     `json:"ref,omitempty"`
 	IPs          []IPNode `json:"ips"`

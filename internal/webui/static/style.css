@@ -62,6 +62,13 @@ body {
 .controls button:hover { border-color: var(--accent); }
 .controls .auto { color: var(--muted); font-size: 12px; user-select: none; }
 .updated { color: var(--muted); font-size: 12px; min-width: 120px; }
+.user { color: var(--text); font-size: 12px; font-weight: 600; }
+.logout {
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; cursor: pointer; text-decoration: none;
+  font-size: 13px;
+}
+.logout:hover { border-color: var(--unhealthy); color: var(--unhealthy); }
 
 .legend { display: flex; gap: 8px; padding: 10px 20px; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--bg); }
 .chip {

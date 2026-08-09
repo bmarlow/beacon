@@ -113,12 +113,14 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 
 	// When auth is required, derive the user from the oauth-proxy forwarded
 	// headers and filter the graph to what that user can read.
+	var authedUser string
 	if s.RequireAuth {
 		user, ok := userFromRequest(r)
 		if !ok {
 			http.Error(w, "unauthorized: missing forwarded user identity", http.StatusUnauthorized)
 			return
 		}
+		authedUser = user.Name
 		builder.Authz = NewAccessChecker(s.Client, user)
 	}
 
@@ -127,6 +129,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	graph.User = authedUser
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")

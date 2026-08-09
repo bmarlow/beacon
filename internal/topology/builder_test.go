@@ -405,7 +405,10 @@ func TestBuild_RBACFiltering(t *testing.T) {
 	}
 }
 
-func TestBuild_RBACHidesPool(t *testing.T) {
+// A user who can see a Gateway but cannot read the backing IPAddressPool should
+// still get a correctly-rendered pool -> VIP -> gateway tree, with the pool
+// marked Restricted (contextual) and not linkable.
+func TestBuild_RestrictedPoolStillShownForContext(t *testing.T) {
 	s := scheme(t)
 	pool := &metallb.IPAddressPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
@@ -416,7 +419,7 @@ func TestBuild_RBACHidesPool(t *testing.T) {
 		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.10"}}},
 	}
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gw).Build()
-	// User cannot read the pool -> pool hidden; gateway can't be placed -> unpooled.
+	// User can see the Gateway but NOT read the pool (no metallb access).
 	az := &fakeAuthz{allow: map[string]bool{
 		"gateway.networking.k8s.io/gateways/app/gw": true,
 	}}
@@ -424,10 +427,20 @@ func TestBuild_RBACHidesPool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if len(g.Pools) != 0 {
-		t.Fatalf("expected no pools visible, got %d", len(g.Pools))
+	if len(g.Pools) != 1 {
+		t.Fatalf("expected the pool shown for context, got %d", len(g.Pools))
 	}
-	if len(g.UnpooledGateways) != 1 {
-		t.Fatalf("expected gw in unpooled, got %d", len(g.UnpooledGateways))
+	p := g.Pools[0]
+	if !p.Restricted {
+		t.Fatal("expected pool marked Restricted")
+	}
+	if p.Ref != nil {
+		t.Fatal("restricted pool must not be linkable (Ref should be nil)")
+	}
+	if len(p.IPs) != 1 || len(p.IPs[0].Gateways) != 1 || p.IPs[0].Gateways[0].Name != "gw" {
+		t.Fatalf("expected gw under the pool's VIP, got %+v", p.IPs)
+	}
+	if len(g.UnpooledGateways) != 0 {
+		t.Fatalf("expected no unpooled gateways, got %d", len(g.UnpooledGateways))
 	}
 }
