@@ -4,15 +4,23 @@
 
 # Beacon
 
-**Beacon** is an OpenShift/Kubernetes operator that couples **Gateway API**
-Gateway health to **MetalLB** BGP route advertisements. It continuously watches
-your Gateways, traces each one down to the pods that actually serve its traffic,
-and — based on those pods' health probes — withdraws or restores the Gateway's
-load-balancer IP in MetalLB. All of this happens **without restarting MetalLB or
-flapping BGP adjacencies**.
+**Beacon exists because the Gateway API has no native understanding of the
+actual health of the backend services behind a Gateway.** A Gateway keeps
+advertising its load-balancer IP as long as the Gateway and its proxy exist —
+even when the workloads it routes to are failing their health probes (or, for
+cross-cluster backends, are unreachable over a Skupper link). Upstream routers
+happily keep steering traffic to a VIP whose backends are down.
+
+**Beacon** is an OpenShift/Kubernetes operator that closes that gap by coupling
+**real backend health** to **MetalLB** BGP route advertisements. It continuously
+watches your Gateways, traces each one down to the pods (and Skupper-linked
+remote services) that actually serve its traffic, and — based on those backends'
+health probes — withdraws or restores the Gateway's load-balancer IP in MetalLB.
+All of this happens **without restarting MetalLB or flapping BGP adjacencies**.
 
 Think of it as a health-aware route dampener that keeps your BGP-advertised
-Gateway VIPs pointed only at healthy backends.
+Gateway VIPs pointed only at healthy backends — the backend-health awareness the
+Gateway API itself doesn't provide.
 
 ---
 
