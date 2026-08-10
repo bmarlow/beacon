@@ -97,52 +97,52 @@ func TestEvaluate_Unhealthy(t *testing.T) {
 
 func TestEvaluateService_ScaledToZero(t *testing.T) {
 	tests := []struct {
-		name                 string
-		pods                 []corev1.Pod
-		hasSelector          bool
+		name                  string
+		pods                  []corev1.Pod
+		hasSelector           bool
 		zeroReplicasUnhealthy bool
-		wantCounted          bool
-		wantHealthy          bool
+		wantCounted           bool
+		wantHealthy           bool
 	}{
 		{
-			name:                 "scaled to zero, selector, unhealthy policy -> counted+down",
-			pods:                 nil,
-			hasSelector:          true,
+			name:                  "scaled to zero, selector, unhealthy policy -> counted+down",
+			pods:                  nil,
+			hasSelector:           true,
 			zeroReplicasUnhealthy: true,
-			wantCounted:          true,
-			wantHealthy:          false,
+			wantCounted:           true,
+			wantHealthy:           false,
 		},
 		{
-			name:                 "scaled to zero, selector, exempt policy -> not counted",
-			pods:                 nil,
-			hasSelector:          true,
+			name:                  "scaled to zero, selector, exempt policy -> not counted",
+			pods:                  nil,
+			hasSelector:           true,
 			zeroReplicasUnhealthy: false,
-			wantCounted:          false,
-			wantHealthy:          false,
+			wantCounted:           false,
+			wantHealthy:           false,
 		},
 		{
-			name:                 "scaled to zero, no selector -> not counted even under unhealthy policy",
-			pods:                 nil,
-			hasSelector:          false,
+			name:                  "scaled to zero, no selector -> not counted even under unhealthy policy",
+			pods:                  nil,
+			hasSelector:           false,
 			zeroReplicasUnhealthy: true,
-			wantCounted:          false,
-			wantHealthy:          false,
+			wantCounted:           false,
+			wantHealthy:           false,
 		},
 		{
-			name:                 "has probed pods -> normal path, not scaled to zero",
-			pods:                 []corev1.Pod{podWithProbe("a", true)},
-			hasSelector:          true,
+			name:                  "has probed pods -> normal path, not scaled to zero",
+			pods:                  []corev1.Pod{podWithProbe("a", true)},
+			hasSelector:           true,
 			zeroReplicasUnhealthy: true,
-			wantCounted:          true,
-			wantHealthy:          true,
+			wantCounted:           true,
+			wantHealthy:           true,
 		},
 		{
-			name:                 "pods exist but none probed -> exempt (not scaled to zero)",
-			pods:                 []corev1.Pod{podNoProbe("a")},
-			hasSelector:          true,
+			name:                  "pods exist but none probed -> exempt (not scaled to zero)",
+			pods:                  []corev1.Pod{podNoProbe("a")},
+			hasSelector:           true,
 			zeroReplicasUnhealthy: true,
-			wantCounted:          false,
-			wantHealthy:          false,
+			wantCounted:           false,
+			wantHealthy:           false,
 		},
 	}
 	for _, tc := range tests {
