@@ -154,7 +154,7 @@ spec:
               resources: ["services"]
               verbs: ["get", "list", "watch", "create", "update", "patch"]
             - apiGroups: [""]
-              resources: ["pods", "endpoints"]
+              resources: ["pods"]
               verbs: ["get", "list", "watch"]
             - apiGroups: ["discovery.k8s.io"]
               resources: ["endpointslices"]

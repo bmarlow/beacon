@@ -55,7 +55,6 @@ rules:
       - ""
     resources:
       - pods
-      - endpoints
     verbs:
       - get
       - list
