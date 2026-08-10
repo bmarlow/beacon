@@ -222,7 +222,10 @@ type ServiceNode struct {
 	// workload lives on a remote cluster over a Skupper link. Health comes from
 	// the Listener status rather than local pods.
 	Skupper *SkupperInfo `json:"skupper,omitempty"`
-	Pods    []PodNode    `json:"pods"`
+	// ScaledToZero is true when the Service has a selector but zero pods and the
+	// effective zeroReplicasPolicy treats that as unhealthy.
+	ScaledToZero bool      `json:"scaledToZero,omitempty"`
+	Pods         []PodNode `json:"pods"`
 }
 
 // SkupperInfo describes a Skupper-linked (remote) backend.

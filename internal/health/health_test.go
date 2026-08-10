@@ -95,6 +95,69 @@ func TestEvaluate_Unhealthy(t *testing.T) {
 	}
 }
 
+func TestEvaluateService_ScaledToZero(t *testing.T) {
+	tests := []struct {
+		name                 string
+		pods                 []corev1.Pod
+		hasSelector          bool
+		zeroReplicasUnhealthy bool
+		wantCounted          bool
+		wantHealthy          bool
+	}{
+		{
+			name:                 "scaled to zero, selector, unhealthy policy -> counted+down",
+			pods:                 nil,
+			hasSelector:          true,
+			zeroReplicasUnhealthy: true,
+			wantCounted:          true,
+			wantHealthy:          false,
+		},
+		{
+			name:                 "scaled to zero, selector, exempt policy -> not counted",
+			pods:                 nil,
+			hasSelector:          true,
+			zeroReplicasUnhealthy: false,
+			wantCounted:          false,
+			wantHealthy:          false,
+		},
+		{
+			name:                 "scaled to zero, no selector -> not counted even under unhealthy policy",
+			pods:                 nil,
+			hasSelector:          false,
+			zeroReplicasUnhealthy: true,
+			wantCounted:          false,
+			wantHealthy:          false,
+		},
+		{
+			name:                 "has probed pods -> normal path, not scaled to zero",
+			pods:                 []corev1.Pod{podWithProbe("a", true)},
+			hasSelector:          true,
+			zeroReplicasUnhealthy: true,
+			wantCounted:          true,
+			wantHealthy:          true,
+		},
+		{
+			name:                 "pods exist but none probed -> exempt (not scaled to zero)",
+			pods:                 []corev1.Pod{podNoProbe("a")},
+			hasSelector:          true,
+			zeroReplicasUnhealthy: true,
+			wantCounted:          false,
+			wantHealthy:          false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			counted, healthy, _, _ := EvaluateService(tc.pods, 1, tc.hasSelector, tc.zeroReplicasUnhealthy)
+			if counted != tc.wantCounted {
+				t.Fatalf("counted = %v, want %v", counted, tc.wantCounted)
+			}
+			if healthy != tc.wantHealthy {
+				t.Fatalf("healthy = %v, want %v", healthy, tc.wantHealthy)
+			}
+		})
+	}
+}
+
 func TestEvaluate_TerminatingIgnored(t *testing.T) {
 	p := podWithProbe("a", false)
 	now := metav1.Now()

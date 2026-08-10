@@ -97,6 +97,28 @@ type GatewayHealthPolicySpec struct {
 	// +optional
 	MinHealthyPodPercent *int32 `json:"minHealthyPodPercent,omitempty"`
 
+	// ZeroReplicasPolicy controls how a backend Service that is "scaled to zero"
+	// is treated. A Service is considered scaled to zero when it has a pod
+	// selector (i.e. it is meant to have pods) but currently has zero probed
+	// pods.
+	//
+	//   - "Unhealthy" (default): the Service counts as a failing backend, so it
+	//     lowers the healthy-backend ratio and can cause the Gateway's VIP to be
+	//     withdrawn — catching the case where a backend has unintentionally
+	//     dropped to zero replicas (a black hole).
+	//   - "Exempt": the Service is ignored (not counted), tolerating deliberate
+	//     scale-to-zero without withdrawing the VIP.
+	//
+	// Selector-less Services (e.g. ExternalName or manually-managed endpoints)
+	// are always exempt regardless of this setting. May be overridden
+	// per-Gateway or per-Service with the "beacon.io/zero-replicas-policy"
+	// annotation (Service > Gateway > this default).
+	//
+	// +kubebuilder:validation:Enum=Unhealthy;Exempt
+	// +kubebuilder:default=Unhealthy
+	// +optional
+	ZeroReplicasPolicy ZeroReplicasPolicy `json:"zeroReplicasPolicy,omitempty"`
+
 	// MetalLB configures how Beacon interacts with MetalLB advertisements.
 	// +optional
 	MetalLB MetalLBConfig `json:"metallb,omitempty"`
@@ -121,6 +143,17 @@ type GatewayHealthPolicySpec struct {
 	// +optional
 	Paused bool `json:"paused,omitempty"`
 }
+
+// ZeroReplicasPolicy enumerates how a scaled-to-zero backend Service is treated.
+type ZeroReplicasPolicy string
+
+const (
+	// ZeroReplicasUnhealthy treats a scaled-to-zero backend as a failing
+	// backend (default).
+	ZeroReplicasUnhealthy ZeroReplicasPolicy = "Unhealthy"
+	// ZeroReplicasExempt ignores a scaled-to-zero backend.
+	ZeroReplicasExempt ZeroReplicasPolicy = "Exempt"
+)
 
 // MetalLBConfig describes how Beacon locates MetalLB.
 //

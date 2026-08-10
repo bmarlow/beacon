@@ -29,6 +29,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
+
+	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {
@@ -138,7 +140,7 @@ func TestResolve_MonitorsBackendNotProxyPods(t *testing.T) {
 		Build()
 
 	r := &Resolver{Client: cl}
-	res, err := r.Resolve(context.Background(), gw, 1)
+	res, err := r.Resolve(context.Background(), gw, 1, beaconv1alpha1.ZeroReplicasUnhealthy)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -216,7 +218,7 @@ func TestResolve_CrossNamespaceBackend(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gw, backendSvc, backendPod, slice, route).Build()
 
-	res, err := (&Resolver{Client: cl}).Resolve(context.Background(), gw, 1)
+	res, err := (&Resolver{Client: cl}).Resolve(context.Background(), gw, 1, beaconv1alpha1.ZeroReplicasUnhealthy)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

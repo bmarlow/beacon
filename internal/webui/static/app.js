@@ -186,6 +186,9 @@
         s.skupper.listenerName +
         " \u00b7 " +
         (s.skupper.ready ? "remote ready" : "remote unavailable");
+    } else if (s.scaledToZero) {
+      // Selector but zero pods, treated as unhealthy by the zeroReplicasPolicy.
+      meta = (s.type || "") + " \u00b7 \u26A0 scaled to zero";
     } else {
       // Show the ready/probed pod ratio (probe-less pods are not counted).
       const probed = (s.pods || []).filter((p) => p.probed);

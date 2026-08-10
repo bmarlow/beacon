@@ -52,6 +52,10 @@ const (
 	// Gateway-level value for that Service only.
 	OverrideMinHealthyPodPercentAnnotation = "beacon.io/min-healthy-pod-percent"
 
+	// OverrideZeroReplicasPolicyAnnotation lets a Gateway (or a backend Service)
+	// override how a scaled-to-zero backend is treated: "Unhealthy" or "Exempt".
+	OverrideZeroReplicasPolicyAnnotation = "beacon.io/zero-replicas-policy"
+
 	// DefaultMinHealthyBackendPercent is used when neither the policy nor an
 	// annotation specifies one: 100% (any counted backend down withdraws).
 	DefaultMinHealthyBackendPercent int32 = 100
@@ -60,6 +64,39 @@ const (
 	// a single Ready pod keeps the Service (and Gateway) up.
 	DefaultMinHealthyPodPercent int32 = 1
 )
+
+// ZeroReplicasPolicy returns the Gateway-level policy for scaled-to-zero
+// backends: the per-Gateway annotation override if valid, else the policy value,
+// else the default (Unhealthy).
+func ZeroReplicasPolicy(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPolicySpec) beaconv1alpha1.ZeroReplicasPolicy {
+	if p, ok := parseZeroReplicasPolicy(gw.Annotations); ok {
+		return p
+	}
+	if spec.ZeroReplicasPolicy != "" {
+		return spec.ZeroReplicasPolicy
+	}
+	return beaconv1alpha1.ZeroReplicasUnhealthy
+}
+
+// ServiceZeroReplicasPolicy returns the effective policy for a backend Service,
+// applying precedence: Service annotation > Gateway-level value.
+func ServiceZeroReplicasPolicy(svcAnnotations map[string]string, gatewayLevel beaconv1alpha1.ZeroReplicasPolicy) beaconv1alpha1.ZeroReplicasPolicy {
+	if p, ok := parseZeroReplicasPolicy(svcAnnotations); ok {
+		return p
+	}
+	return gatewayLevel
+}
+
+func parseZeroReplicasPolicy(annotations map[string]string) (beaconv1alpha1.ZeroReplicasPolicy, bool) {
+	v := strings.TrimSpace(annotations[OverrideZeroReplicasPolicyAnnotation])
+	switch strings.ToLower(v) {
+	case "unhealthy":
+		return beaconv1alpha1.ZeroReplicasUnhealthy, true
+	case "exempt":
+		return beaconv1alpha1.ZeroReplicasExempt, true
+	}
+	return "", false
+}
 
 // IsExempt reports whether a Gateway is exempt from Beacon management, honoring
 // BOTH the per-Gateway annotation and the central exemption list in the policy.

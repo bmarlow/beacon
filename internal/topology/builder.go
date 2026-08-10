@@ -344,8 +344,10 @@ func (b *Builder) buildGatewayNode(
 	// Routes -> backend services -> pods.
 	// Collect per-Service health for the minimum-healthy-backend-percentage rule.
 	// gatewayPodPercent is the Gateway-level per-Service pod-health threshold
-	// (Services may override it via annotation).
+	// and gatewayZeroPolicy the scaled-to-zero policy (Services may override
+	// both via annotations).
 	gatewayPodPercent := policy.MinHealthyPodPercent(gw, spec)
+	gatewayZeroPolicy := policy.ZeroReplicasPolicy(gw, spec)
 	var svcHealths []health.ServiceHealth
 	routes := routesByGateway[key]
 	sort.Slice(routes, func(i, j int) bool { return routes[i].name < routes[j].name })
@@ -437,20 +439,33 @@ func (b *Builder) buildGatewayNode(
 			}
 			// Per-Service "up" verdict uses the pod-health percentage threshold
 			// (Service annotation overrides the Gateway-level value; default
-			// 1 = any Ready pod).
+			// 1 = any Ready pod). A Service with a selector but zero pods
+			// (scaled to zero) is counted as failing unless its effective
+			// zeroReplicasPolicy is Exempt.
 			podPct := policy.ServiceMinHealthyPodPercent(svc.Annotations, gatewayPodPercent)
 			svcCounted := svcProbed > 0
 			svcReady := svcProbed - svcUnhealthy
 			svcHealthy := false
+			svcScaledToZero := false
 			if svcCounted {
 				svcHealthy = (100*svcReady)/svcProbed >= int(podPct)
+			} else if len(pods) == 0 && len(svc.Spec.Selector) > 0 {
+				zeroPol := policy.ServiceZeroReplicasPolicy(svc.Annotations, gatewayZeroPolicy)
+				if zeroPol == beaconv1alpha1.ZeroReplicasUnhealthy {
+					svcCounted = true // counted + not healthy
+					svcScaledToZero = true
+				}
 			}
+			sn.ScaledToZero = svcScaledToZero
 			svcHealths = append(svcHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name,
 				Counted: svcCounted,
 				Healthy: svcHealthy,
 			})
 			sn.Status = worstPodStatus(sn.Pods)
+			if svcScaledToZero {
+				sn.Status = StatusUnhealthy
+			}
 			// A Service's "time in status" is the most recent of its pods'
 			// status transitions (the last time its aggregate could have changed).
 			sn.StatusTiming = latestChildTiming(podTimings(sn.Pods))

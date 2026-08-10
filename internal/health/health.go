@@ -76,9 +76,29 @@ func (r Result) Healthy() bool {
 // It returns counted=false when the Service has no probed pods (exempt). The
 // default minHealthyPodPercent of 1 means a single Ready pod keeps it up.
 func EvaluateServiceByPodPercent(pods []corev1.Pod, minHealthyPodPercent int) (counted, healthy bool, readyProbed, probed int) {
+	return EvaluateService(pods, minHealthyPodPercent, false, false)
+}
+
+// EvaluateService decides a backend Service's up/down state, additionally
+// handling the "scaled to zero" case per zeroReplicasUnhealthy.
+//
+//   - Normal case (has probed pods): up while
+//     (readyProbed/probed)*100 >= minHealthyPodPercent.
+//   - Zero probed pods: this is either a scaled-to-zero workload or a Service
+//     with no probes. When hasSelector is true (the Service is meant to have
+//     pods) AND zeroReplicasUnhealthy is true, it is treated as a **counted,
+//     failing** backend (scaledToZero=true). Otherwise it is exempt
+//     (counted=false) — preserving the "no health signal" behavior for
+//     selector-less services and deliberate Exempt policy.
+func EvaluateService(pods []corev1.Pod, minHealthyPodPercent int, hasSelector, zeroReplicasUnhealthy bool) (counted, healthy bool, readyProbed, probed int) {
 	res := Evaluate(pods)
 	probed = res.ProbedPods
 	if probed == 0 {
+		// Scaled to zero (or no probes). Treat as a failing backend only when
+		// the Service expects pods and the policy says Unhealthy.
+		if hasSelector && zeroReplicasUnhealthy && res.TotalPods == 0 {
+			return true, false, 0, 0
+		}
 		return false, false, 0, 0
 	}
 	readyProbed = res.ProbedPods - res.UnhealthyPods

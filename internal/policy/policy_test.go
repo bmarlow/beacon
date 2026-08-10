@@ -137,3 +137,40 @@ func TestServiceMinHealthyPodPercent_Precedence(t *testing.T) {
 		t.Fatalf("expected service override 100, got %d", got)
 	}
 }
+
+func TestZeroReplicasPolicy(t *testing.T) {
+	spec := &beaconv1alpha1.GatewayHealthPolicySpec{}
+	// default = Unhealthy
+	g := gw("ns", "a", nil, "cls")
+	if got := ZeroReplicasPolicy(g, spec); got != beaconv1alpha1.ZeroReplicasUnhealthy {
+		t.Fatalf("expected default Unhealthy, got %q", got)
+	}
+	// policy value
+	spec.ZeroReplicasPolicy = beaconv1alpha1.ZeroReplicasExempt
+	if got := ZeroReplicasPolicy(g, spec); got != beaconv1alpha1.ZeroReplicasExempt {
+		t.Fatalf("expected policy Exempt, got %q", got)
+	}
+	// gateway annotation override (case-insensitive)
+	g2 := gw("ns", "a", map[string]string{OverrideZeroReplicasPolicyAnnotation: "unhealthy"}, "cls")
+	if got := ZeroReplicasPolicy(g2, spec); got != beaconv1alpha1.ZeroReplicasUnhealthy {
+		t.Fatalf("expected gateway annotation Unhealthy, got %q", got)
+	}
+	// invalid annotation falls back to policy value
+	g3 := gw("ns", "a", map[string]string{OverrideZeroReplicasPolicyAnnotation: "bogus"}, "cls")
+	if got := ZeroReplicasPolicy(g3, spec); got != beaconv1alpha1.ZeroReplicasExempt {
+		t.Fatalf("expected fallback to policy Exempt, got %q", got)
+	}
+}
+
+func TestServiceZeroReplicasPolicy_Precedence(t *testing.T) {
+	gatewayLevel := beaconv1alpha1.ZeroReplicasExempt
+	// no service annotation -> gateway level
+	if got := ServiceZeroReplicasPolicy(nil, gatewayLevel); got != beaconv1alpha1.ZeroReplicasExempt {
+		t.Fatalf("expected gateway level Exempt, got %q", got)
+	}
+	// service annotation wins
+	svcAnn := map[string]string{OverrideZeroReplicasPolicyAnnotation: "Unhealthy"}
+	if got := ServiceZeroReplicasPolicy(svcAnn, gatewayLevel); got != beaconv1alpha1.ZeroReplicasUnhealthy {
+		t.Fatalf("expected service override Unhealthy, got %q", got)
+	}
+}

@@ -57,6 +57,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
+	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/health"
 	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/skupper"
@@ -118,9 +119,9 @@ const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
 // Resolve traces a Gateway to its IPs, its proxy Service(s) (for advertisement
 // control), and its BACKEND workload Pods (for health evaluation).
 // Resolve traces a Gateway. gatewayPodPercent is the Gateway-level
-// minimum-healthy-pod threshold (from policy.MinHealthyPodPercent); each backend
-// Service may override it via the beacon.io/min-healthy-pod-percent annotation.
-func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodPercent int) (*GatewayResolution, error) {
+// minimum-healthy-pod threshold and gatewayZeroPolicy the Gateway-level
+// scaled-to-zero policy; each backend Service may override both via annotations.
+func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodPercent int, gatewayZeroPolicy beaconv1alpha1.ZeroReplicasPolicy) (*GatewayResolution, error) {
 	res := &GatewayResolution{}
 
 	// 1. Infer the VIP(s) from Gateway status, then fall back to the proxy
@@ -177,9 +178,14 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 		// Per-service health: a Service is "up" while the percentage of its
 		// probed pods that are Ready meets the per-Service pod threshold
 		// (Service annotation overrides the Gateway-level value; default 1 =
-		// any Ready pod). Probe-less Services are not counted.
+		// any Ready pod). A Service with a selector but zero pods (scaled to
+		// zero) is counted as failing unless the effective zeroReplicasPolicy is
+		// Exempt. Probe-less / selector-less Services are not counted.
 		podPct := policy.ServiceMinHealthyPodPercent(svc.Annotations, int32(gatewayPodPercent))
-		counted, healthy, _, _ := health.EvaluateServiceByPodPercent(pods, int(podPct))
+		zeroPol := policy.ServiceZeroReplicasPolicy(svc.Annotations, gatewayZeroPolicy)
+		hasSelector := len(svc.Spec.Selector) > 0
+		counted, healthy, _, _ := health.EvaluateService(pods, int(podPct), hasSelector,
+			zeroPol == beaconv1alpha1.ZeroReplicasUnhealthy)
 		res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
 			Namespace: svc.Namespace, Name: svc.Name,
 			Counted: counted,

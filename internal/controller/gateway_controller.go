@@ -146,7 +146,8 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// to the Gateway-level value (Services may override via annotation).
 	resolver := &trace.Resolver{Client: r.Client}
 	gatewayPodPercent := int(policy.MinHealthyPodPercent(gw, spec))
-	resolution, err := resolver.Resolve(ctx, gw, gatewayPodPercent)
+	gatewayZeroPolicy := policy.ZeroReplicasPolicy(gw, spec)
+	resolution, err := resolver.Resolve(ctx, gw, gatewayPodPercent, gatewayZeroPolicy)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

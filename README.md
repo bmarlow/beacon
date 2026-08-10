@@ -177,6 +177,16 @@ the threshold (inclusive): `(readyPods / probedPods) * 100 >= minHealthyPodPerce
   **Service annotation > Gateway annotation > policy default**.
 - Probe-less pods are ignored; a Service with no probed pods is exempt.
 
+> **Scaled-to-zero backends — `zeroReplicasPolicy`.** A Service that has a pod
+> selector but **zero pods** (scaled to zero) has no pod health signal. By
+> default (`zeroReplicasPolicy: Unhealthy`) Beacon treats it as a **counted,
+> failing** backend, so an accidental scale-to-zero lowers the healthy ratio and
+> can withdraw the VIP instead of leaving a black hole. Set `Exempt` to tolerate
+> deliberate scale-to-zero (the Service is simply ignored). Selector-less
+> Services (e.g. `ExternalName`) are always exempt. Configurable in the policy
+> (`spec.zeroReplicasPolicy`) and overridable per-Gateway or per-Service via the
+> `beacon.io/zero-replicas-policy` annotation (Service > Gateway > policy).
+
 **2. Is the Gateway up? — `minHealthyBackendPercent`** (per-Gateway).
 Given each Service's up/down verdict from level 1, this is the minimum percentage
 of a Gateway's *counted* backend services that must be healthy for the route to
@@ -759,6 +769,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `resyncInterval`                   | duration   | `10s`                  | Worst-case reconcile cadence between watch events.                          |
 | `minHealthyBackendPercent`         | int (0–100)| `100`                  | Min % of a Gateway's counted backend services that must be healthy to stay advertised (inclusive). 100 = any counted backend down withdraws. See [Multiple backends per Gateway](#multiple-backend-services-per-gateway). |
 | `minHealthyPodPercent`             | int (0–100)| `1`                    | Min % of a backend Service's probed pods that must be Ready for that Service to count as healthy (inclusive). 1 = a single Ready pod keeps it up. Overridable per-Gateway and per-Service. |
+| `zeroReplicasPolicy`               | `Unhealthy`\|`Exempt` | `Unhealthy` | How to treat a backend Service scaled to zero (selector but 0 pods). `Unhealthy` counts it as a failing backend (can withdraw the VIP); `Exempt` ignores it. Selector-less Services are always exempt. Overridable per-Gateway and per-Service. |
 | `paused`                           | bool       | `false`                | Observe-only mode; Beacon takes no withdraw/restore action.                 |
 | `gatewayClassNames`                | []string   | `[]` (all)             | Restrict management to these Gateway classes.                              |
 | `exemptions`                       | []ref      | `[]`                   | Gateways (namespace/name) to exclude.                                       |
@@ -773,6 +784,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `beacon.io/readvertise-after`    | duration   | Override `readvertiseAfter` for this Gateway.|
 | `beacon.io/min-healthy-percent`  | int (0–100)| Override `minHealthyBackendPercent` for this Gateway. |
 | `beacon.io/min-healthy-pod-percent` | int (0–100)| Override `minHealthyPodPercent`. On a **Gateway**: the default for its Services. On a **backend Service**: overrides the Gateway value for that Service. |
+| `beacon.io/zero-replicas-policy` | `Unhealthy`\|`Exempt` | Override `zeroReplicasPolicy`. On a **Gateway**: the default for its Services. On a **backend Service**: overrides the Gateway value for that Service. |
 
 ### Manager flags
 
