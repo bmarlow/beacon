@@ -104,3 +104,36 @@ func TestMinHealthyBackendPercent(t *testing.T) {
 		t.Fatalf("expected clamp to 100, got %d", got)
 	}
 }
+
+func TestMinHealthyPodPercent(t *testing.T) {
+	spec := &beaconv1alpha1.GatewayHealthPolicySpec{}
+	// default = 1 (any ready pod)
+	g := gw("ns", "a", nil, "cls")
+	if got := MinHealthyPodPercent(g, spec); got != 1 {
+		t.Fatalf("expected default 1, got %d", got)
+	}
+	// policy value
+	v := int32(50)
+	spec.MinHealthyPodPercent = &v
+	if got := MinHealthyPodPercent(g, spec); got != 50 {
+		t.Fatalf("expected policy 50, got %d", got)
+	}
+	// gateway annotation override
+	g2 := gw("ns", "a", map[string]string{OverrideMinHealthyPodPercentAnnotation: "100"}, "cls")
+	if got := MinHealthyPodPercent(g2, spec); got != 100 {
+		t.Fatalf("expected gateway annotation 100, got %d", got)
+	}
+}
+
+func TestServiceMinHealthyPodPercent_Precedence(t *testing.T) {
+	gatewayLevel := int32(50)
+	// no service annotation -> gateway level
+	if got := ServiceMinHealthyPodPercent(nil, gatewayLevel); got != 50 {
+		t.Fatalf("expected gateway level 50, got %d", got)
+	}
+	// service annotation wins
+	svcAnn := map[string]string{OverrideMinHealthyPodPercentAnnotation: "100"}
+	if got := ServiceMinHealthyPodPercent(svcAnn, gatewayLevel); got != 100 {
+		t.Fatalf("expected service override 100, got %d", got)
+	}
+}

@@ -138,7 +138,7 @@ func TestResolve_MonitorsBackendNotProxyPods(t *testing.T) {
 		Build()
 
 	r := &Resolver{Client: cl}
-	res, err := r.Resolve(context.Background(), gw)
+	res, err := r.Resolve(context.Background(), gw, 1)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestResolve_CrossNamespaceBackend(t *testing.T) {
 	cl := fake.NewClientBuilder().WithScheme(s).
 		WithObjects(gw, backendSvc, backendPod, slice, route).Build()
 
-	res, err := (&Resolver{Client: cl}).Resolve(context.Background(), gw)
+	res, err := (&Resolver{Client: cl}).Resolve(context.Background(), gw, 1)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

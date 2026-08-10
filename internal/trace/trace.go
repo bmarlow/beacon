@@ -58,6 +58,7 @@ import (
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
 	"github.com/bmarlow/beacon/internal/health"
+	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/skupper"
 )
 
@@ -116,7 +117,10 @@ const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
 
 // Resolve traces a Gateway to its IPs, its proxy Service(s) (for advertisement
 // control), and its BACKEND workload Pods (for health evaluation).
-func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayResolution, error) {
+// Resolve traces a Gateway. gatewayPodPercent is the Gateway-level
+// minimum-healthy-pod threshold (from policy.MinHealthyPodPercent); each backend
+// Service may override it via the beacon.io/min-healthy-pod-percent annotation.
+func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodPercent int) (*GatewayResolution, error) {
 	res := &GatewayResolution{}
 
 	// 1. Infer the VIP(s) from Gateway status, then fall back to the proxy
@@ -170,13 +174,16 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway) (*GatewayRe
 			return nil, fmt.Errorf("finding pods for backend service %s/%s: %w",
 				backendSvcs[i].Namespace, backendSvcs[i].Name, err)
 		}
-		// Per-service health: counted iff it has at least one probed pod;
-		// healthy iff counted and no probed pod is failing.
-		svcRes := health.Evaluate(pods)
+		// Per-service health: a Service is "up" while the percentage of its
+		// probed pods that are Ready meets the per-Service pod threshold
+		// (Service annotation overrides the Gateway-level value; default 1 =
+		// any Ready pod). Probe-less Services are not counted.
+		podPct := policy.ServiceMinHealthyPodPercent(svc.Annotations, int32(gatewayPodPercent))
+		counted, healthy, _, _ := health.EvaluateServiceByPodPercent(pods, int(podPct))
 		res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
 			Namespace: svc.Namespace, Name: svc.Name,
-			Counted: svcRes.ProbedPods > 0,
-			Healthy: svcRes.ProbedPods > 0 && svcRes.UnhealthyPods == 0,
+			Counted: counted,
+			Healthy: healthy,
 		})
 		for j := range pods {
 			key := types.NamespacedName{Namespace: pods[j].Namespace, Name: pods[j].Name}

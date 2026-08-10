@@ -74,6 +74,29 @@ type GatewayHealthPolicySpec struct {
 	// +optional
 	MinHealthyBackendPercent *int32 `json:"minHealthyBackendPercent,omitempty"`
 
+	// MinHealthyPodPercent is the minimum percentage of a backend Service's
+	// probed pods that must be Ready for that Service to count as healthy. It is
+	// evaluated inclusively: a Service is up while
+	//
+	//	(ready probed pods / probed pods) * 100 >= MinHealthyPodPercent
+	//
+	// The default is 1, meaning a single Ready pod keeps the Service (and thus
+	// the Gateway) up. Set 100 to require all pods Ready, or e.g. 50 to require
+	// at least half. Probe-less pods are ignored (a Service with no probed pods
+	// is exempt).
+	//
+	// This is the per-Service level of the health decision; the resulting
+	// per-Service verdicts then feed MinHealthyBackendPercent at the Gateway
+	// level. May be overridden per-Gateway with the
+	// "beacon.io/min-healthy-pod-percent" annotation, and per-Service with the
+	// same annotation on the backend Service (Service > Gateway > this default).
+	//
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=100
+	// +optional
+	MinHealthyPodPercent *int32 `json:"minHealthyPodPercent,omitempty"`
+
 	// MetalLB configures how Beacon interacts with MetalLB advertisements.
 	// +optional
 	MetalLB MetalLBConfig `json:"metallb,omitempty"`

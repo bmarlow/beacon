@@ -46,9 +46,19 @@ const (
 	// minHealthyBackendPercent threshold, e.g. "beacon.io/min-healthy-percent: 50".
 	OverrideMinHealthyPercentAnnotation = "beacon.io/min-healthy-percent"
 
+	// OverrideMinHealthyPodPercentAnnotation lets a Gateway (or a backend
+	// Service) override the minHealthyPodPercent threshold, e.g.
+	// "beacon.io/min-healthy-pod-percent: 50". On a Service it overrides the
+	// Gateway-level value for that Service only.
+	OverrideMinHealthyPodPercentAnnotation = "beacon.io/min-healthy-pod-percent"
+
 	// DefaultMinHealthyBackendPercent is used when neither the policy nor an
 	// annotation specifies one: 100% (any counted backend down withdraws).
 	DefaultMinHealthyBackendPercent int32 = 100
+
+	// DefaultMinHealthyPodPercent is used when nothing specifies one: 1%, i.e.
+	// a single Ready pod keeps the Service (and Gateway) up.
+	DefaultMinHealthyPodPercent int32 = 1
 )
 
 // IsExempt reports whether a Gateway is exempt from Beacon management, honoring
@@ -106,15 +116,51 @@ func ReadvertiseAfter(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPol
 // present and valid, else the policy value, else the default (100). The result
 // is clamped to [0, 100].
 func MinHealthyBackendPercent(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPolicySpec) int32 {
-	if v, ok := gw.Annotations[OverrideMinHealthyPercentAnnotation]; ok && v != "" {
-		if n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), "%")); err == nil {
-			return clampPercent(int32(n))
-		}
+	if n, ok := parsePercentAnnotation(gw.Annotations, OverrideMinHealthyPercentAnnotation); ok {
+		return n
 	}
 	if spec.MinHealthyBackendPercent != nil {
 		return clampPercent(*spec.MinHealthyBackendPercent)
 	}
 	return DefaultMinHealthyBackendPercent
+}
+
+// MinHealthyPodPercent returns the Gateway-level minimum-healthy-pod percentage
+// (the per-Service pod threshold default for this Gateway): the per-Gateway
+// annotation override if present and valid, else the policy value, else the
+// default (1 = any Ready pod). Clamped to [0, 100].
+func MinHealthyPodPercent(gw *gwapiv1.Gateway, spec *beaconv1alpha1.GatewayHealthPolicySpec) int32 {
+	if n, ok := parsePercentAnnotation(gw.Annotations, OverrideMinHealthyPodPercentAnnotation); ok {
+		return n
+	}
+	if spec.MinHealthyPodPercent != nil {
+		return clampPercent(*spec.MinHealthyPodPercent)
+	}
+	return DefaultMinHealthyPodPercent
+}
+
+// ServiceMinHealthyPodPercent returns the effective per-Service pod threshold,
+// applying precedence: Service annotation > Gateway-level value.
+// gatewayLevel is the value from MinHealthyPodPercent(gw, spec).
+func ServiceMinHealthyPodPercent(svcAnnotations map[string]string, gatewayLevel int32) int32 {
+	if n, ok := parsePercentAnnotation(svcAnnotations, OverrideMinHealthyPodPercentAnnotation); ok {
+		return n
+	}
+	return gatewayLevel
+}
+
+// parsePercentAnnotation parses an integer percent annotation (optional trailing
+// '%'), returning the clamped value and whether it was present and valid.
+func parsePercentAnnotation(annotations map[string]string, key string) (int32, bool) {
+	v, ok := annotations[key]
+	if !ok || v == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(strings.TrimSuffix(strings.TrimSpace(v), "%"))
+	if err != nil {
+		return 0, false
+	}
+	return clampPercent(int32(n)), true
 }
 
 func clampPercent(n int32) int32 {

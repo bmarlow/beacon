@@ -343,6 +343,9 @@ func (b *Builder) buildGatewayNode(
 
 	// Routes -> backend services -> pods.
 	// Collect per-Service health for the minimum-healthy-backend-percentage rule.
+	// gatewayPodPercent is the Gateway-level per-Service pod-health threshold
+	// (Services may override it via annotation).
+	gatewayPodPercent := policy.MinHealthyPodPercent(gw, spec)
 	var svcHealths []health.ServiceHealth
 	routes := routesByGateway[key]
 	sort.Slice(routes, func(i, j int) bool { return routes[i].name < routes[j].name })
@@ -432,10 +435,20 @@ func (b *Builder) buildGatewayNode(
 				}
 				sn.Pods = append(sn.Pods, pn)
 			}
+			// Per-Service "up" verdict uses the pod-health percentage threshold
+			// (Service annotation overrides the Gateway-level value; default
+			// 1 = any Ready pod).
+			podPct := policy.ServiceMinHealthyPodPercent(svc.Annotations, gatewayPodPercent)
+			svcCounted := svcProbed > 0
+			svcReady := svcProbed - svcUnhealthy
+			svcHealthy := false
+			if svcCounted {
+				svcHealthy = (100*svcReady)/svcProbed >= int(podPct)
+			}
 			svcHealths = append(svcHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name,
-				Counted: svcProbed > 0,
-				Healthy: svcProbed > 0 && svcUnhealthy == 0,
+				Counted: svcCounted,
+				Healthy: svcHealthy,
 			})
 			sn.Status = worstPodStatus(sn.Pods)
 			// A Service's "time in status" is the most recent of its pods'

@@ -171,14 +171,14 @@ func TestBuild_FullHierarchy(t *testing.T) {
 	if len(svc.Pods) != 2 {
 		t.Fatalf("expected 2 backend pods, got %d", len(svc.Pods))
 	}
-	// Health is per-Service: the single backend Service has a failing pod, so
-	// the service is down. With the default 100% threshold, 0/1 healthy
-	// backends => the Gateway is Unhealthy.
-	if gn.Health != StatusUnhealthy {
-		t.Fatalf("expected gateway health Unhealthy, got %s", gn.Health)
+	// With the default per-Service pod threshold of 1 (any Ready pod keeps the
+	// Service up), 1 of 2 pods Ready => the Service is up. Its single backend is
+	// healthy, so at the default 100% backend threshold the Gateway is Healthy.
+	if gn.Health != StatusHealthy {
+		t.Fatalf("expected gateway health Healthy (1 of 2 pods ready), got %s", gn.Health)
 	}
-	if gn.CountedBackends != 1 || gn.HealthyBackends != 0 || gn.MinHealthyPercent != 100 {
-		t.Fatalf("expected 0/1 backends at 100%%, got %d/%d min=%d",
+	if gn.CountedBackends != 1 || gn.HealthyBackends != 1 || gn.MinHealthyPercent != 100 {
+		t.Fatalf("expected 1/1 healthy backends at 100%%, got %d/%d min=%d",
 			gn.HealthyBackends, gn.CountedBackends, gn.MinHealthyPercent)
 	}
 
@@ -577,5 +577,78 @@ func TestBuild_ThresholdKeepsGatewayUp(t *testing.T) {
 	if gwn.CountedBackends != 2 || gwn.HealthyBackends != 1 || gwn.MinHealthyPercent != 50 {
 		t.Fatalf("expected 1/2 backends at 50%%, got %d/%d min=%d",
 			gwn.HealthyBackends, gwn.CountedBackends, gwn.MinHealthyPercent)
+	}
+}
+
+// A single backend Service with 1 of 3 pods ready: default (pod threshold 1) =>
+// Gateway Healthy; requiring 100% pod readiness => Gateway Unhealthy.
+func TestBuild_PodPercentInteraction(t *testing.T) {
+	mk := func(minPodPct *int32) *Builder {
+		s := scheme(t)
+		pool := &metallb.IPAddressPool{
+			ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+			Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+		}
+		pol := &beaconv1alpha1.GatewayHealthPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+			Spec:       beaconv1alpha1.GatewayHealthPolicySpec{MinHealthyPodPercent: minPodPct},
+		}
+		gw := &gwapiv1.Gateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+			Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.10"}}},
+		}
+		svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "svc", Namespace: "app"}}
+		mkpod := func(n string, ready bool) *corev1.Pod {
+			st := corev1.ConditionTrue
+			if !ready {
+				st = corev1.ConditionFalse
+			}
+			return &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{Name: n, Namespace: "app"},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", ReadinessProbe: &corev1.Probe{}}}},
+				Status:     corev1.PodStatus{Phase: corev1.PodRunning, Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: st}}},
+			}
+		}
+		slice := &discoveryv1.EndpointSlice{
+			ObjectMeta: metav1.ObjectMeta{Name: "svc-1", Namespace: "app",
+				Labels: map[string]string{discoveryv1.LabelServiceName: "svc"}},
+			Endpoints: []discoveryv1.Endpoint{
+				{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "p1", Namespace: "app"}},
+				{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "p2", Namespace: "app"}},
+				{TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "p3", Namespace: "app"}},
+			},
+		}
+		route := &gwapiv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "r", Namespace: "app"},
+			Spec: gwapiv1.HTTPRouteSpec{
+				CommonRouteSpec: gwapiv1.CommonRouteSpec{ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}}},
+				Rules: []gwapiv1.HTTPRouteRule{{BackendRefs: []gwapiv1.HTTPBackendRef{{
+					BackendRef: gwapiv1.BackendRef{BackendObjectReference: gwapiv1.BackendObjectReference{Name: "svc"}},
+				}}}},
+			},
+		}
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+			pool, pol, gw, svc, slice, route,
+			mkpod("p1", true), mkpod("p2", false), mkpod("p3", false)).Build()
+		return &Builder{Client: cl, PolicyName: "cluster"}
+	}
+
+	// Default (nil -> 1): 1/3 ready keeps the service up -> Gateway Healthy.
+	g, err := mk(nil).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if h := g.Pools[0].IPs[0].Gateways[0].Health; h != StatusHealthy {
+		t.Fatalf("default pod threshold: expected Healthy (1/3 ready), got %s", h)
+	}
+
+	// Require 100% pods ready: 1/3 fails -> service down -> Gateway Unhealthy.
+	hundred := int32(100)
+	g, err = mk(&hundred).Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if h := g.Pools[0].IPs[0].Gateways[0].Health; h != StatusUnhealthy {
+		t.Fatalf("100%% pod threshold: expected Unhealthy (1/3 ready), got %s", h)
 	}
 }

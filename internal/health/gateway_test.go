@@ -16,7 +16,12 @@ limitations under the License.
 
 package health
 
-import "testing"
+import (
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 func svc(counted, healthy bool) ServiceHealth {
 	return ServiceHealth{Counted: counted, Healthy: healthy}
@@ -73,5 +78,48 @@ func TestEvaluateGateway_Zero(t *testing.T) {
 	d := EvaluateGateway([]ServiceHealth{svc(true, false), svc(true, false)}, 0)
 	if d.Unhealthy {
 		t.Fatalf("threshold 0 should never be below; got %+v", d)
+	}
+}
+
+func podReady(name string, ready bool) corev1.Pod {
+	st := corev1.ConditionTrue
+	if !ready {
+		st = corev1.ConditionFalse
+	}
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", ReadinessProbe: &corev1.Probe{}}}},
+		Status:     corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: st}}},
+	}
+}
+
+func TestEvaluateServiceByPodPercent(t *testing.T) {
+	// 1 of 3 ready.
+	pods := []corev1.Pod{podReady("a", true), podReady("b", false), podReady("c", false)}
+
+	// Default 1% (any ready pod) => up.
+	counted, healthy, ready, probed := EvaluateServiceByPodPercent(pods, 1)
+	if !counted || !healthy || ready != 1 || probed != 3 {
+		t.Fatalf("1%% with 1/3 ready should be up; got counted=%v healthy=%v %d/%d", counted, healthy, ready, probed)
+	}
+	// 100% => down (not all ready).
+	_, healthy, _, _ = EvaluateServiceByPodPercent(pods, 100)
+	if healthy {
+		t.Fatal("100%% with 1/3 ready should be down")
+	}
+	// 50% => 33% ready is below => down.
+	_, healthy, _, _ = EvaluateServiceByPodPercent(pods, 50)
+	if healthy {
+		t.Fatal("50%% with 33%% ready should be down")
+	}
+	// 33% => 33% ready meets inclusive => up.
+	_, healthy, _, _ = EvaluateServiceByPodPercent(pods, 33)
+	if !healthy {
+		t.Fatal("33%% with 33%% ready should be up (inclusive)")
+	}
+	// No probed pods => not counted.
+	counted, _, _, _ = EvaluateServiceByPodPercent([]corev1.Pod{}, 1)
+	if counted {
+		t.Fatal("no pods => not counted")
 	}
 }

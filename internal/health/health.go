@@ -68,6 +68,24 @@ func (r Result) Healthy() bool {
 	return r.ProbedPods > 0 && r.UnhealthyPods == 0
 }
 
+// EvaluateServiceByPodPercent decides whether a Service is "up" based on the
+// percentage of its probed pods that are Ready, evaluated inclusively:
+//
+//	up  while  (readyProbed / probed) * 100 >= minHealthyPodPercent
+//
+// It returns counted=false when the Service has no probed pods (exempt). The
+// default minHealthyPodPercent of 1 means a single Ready pod keeps it up.
+func EvaluateServiceByPodPercent(pods []corev1.Pod, minHealthyPodPercent int) (counted, healthy bool, readyProbed, probed int) {
+	res := Evaluate(pods)
+	probed = res.ProbedPods
+	if probed == 0 {
+		return false, false, 0, 0
+	}
+	readyProbed = res.ProbedPods - res.UnhealthyPods
+	pct := (100 * readyProbed) / probed
+	return true, pct >= minHealthyPodPercent, readyProbed, probed
+}
+
 // ServiceHealth is the health of a single backend behind a Gateway, at the
 // Service granularity used for the minimum-healthy-backend-percentage decision.
 type ServiceHealth struct {

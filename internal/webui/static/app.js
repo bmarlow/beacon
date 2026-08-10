@@ -187,7 +187,16 @@
         " \u00b7 " +
         (s.skupper.ready ? "remote ready" : "remote unavailable");
     } else {
-      meta = (s.type || "") + (s.pods ? " \u00b7 " + s.pods.length + " pod(s)" : "");
+      // Show the ready/probed pod ratio (probe-less pods are not counted).
+      const probed = (s.pods || []).filter((p) => p.probed);
+      const ready = probed.filter((p) => p.ready).length;
+      let podInfo = "";
+      if (probed.length > 0) {
+        podInfo = " \u00b7 pods " + ready + "/" + probed.length + " ready";
+      } else if (s.pods && s.pods.length) {
+        podInfo = " \u00b7 " + s.pods.length + " pod(s), no probes";
+      }
+      meta = (s.type || "") + podInfo;
     }
     return nodeRow({
       id: "svc/" + s.namespace + "/" + s.name,

@@ -138,11 +138,18 @@ Beacon's health contract is deliberately simple and predictable:
 | Has a probe **and** `PodReady!=True`                      | Unhealthy                    |
 | Terminating (`deletionTimestamp` set)                    | Ignored (transient)          |
 
+**A backend Service is up** based on the percentage of its probed pods that are
+Ready — see [Multiple backend services per Gateway](#multiple-backend-services-per-gateway).
+By **default a single Ready pod keeps the Service up** (`minHealthyPodPercent: 1`),
+so a Service with 1 of 3 pods Ready is still considered healthy. Raise the
+threshold (per Gateway or per Service) to require more replicas.
+
 A **Gateway** is then:
 
-- **Unhealthy** if at least one non-exempt (probed) backing pod is failing.
-- **Exempt** if every backing pod is exempt, or it has no pods.
-- **Healthy** if it has at least one probed pod and none are failing.
+- **Unhealthy** when the percentage of its healthy backend Services drops below
+  `minHealthyBackendPercent` (default 100 = any counted backend down).
+- **Exempt** if every backend is exempt (no probed pods / no counted backends).
+- **Healthy** otherwise.
 
 > Only a Gateway that is **Unhealthy** and whose IP is **sourced from MetalLB**
 > is eligible for withdrawal.
@@ -154,13 +161,26 @@ A **Gateway** is then:
 
 ### Multiple backend services per Gateway
 
-A Gateway can front more than one backend Service. By default, **if any backend
-service goes down, Beacon withdraws the Gateway's route** — i.e. all counted
-backends must be healthy.
+Beacon evaluates health at **two levels**, both configurable:
 
-You can relax this with **`minHealthyBackendPercent`**: the minimum percentage of
-a Gateway's *counted* backend services that must be healthy for the route to stay
-advertised. It is evaluated **inclusively**:
+**1. Is a backend Service up? — `minHealthyPodPercent`** (per-Service).
+A Service is healthy while the percentage of its probed pods that are Ready meets
+the threshold (inclusive): `(readyPods / probedPods) * 100 >= minHealthyPodPercent`.
+
+- **Default `1` — a single Ready pod keeps the Service up.** So 1 of 3 pods Ready
+  → the Service is still healthy (Kubernetes routes around the NotReady pods).
+- Raise it to require more replicas: `100` = all pods must be Ready; `50` = at
+  least half.
+- Configurable at the **Gateway** level (`spec.minHealthyPodPercent` or the
+  `beacon.io/min-healthy-pod-percent` annotation on the Gateway) **and overridable
+  per backend Service** via the same annotation on the Service. Precedence:
+  **Service annotation > Gateway annotation > policy default**.
+- Probe-less pods are ignored; a Service with no probed pods is exempt.
+
+**2. Is the Gateway up? — `minHealthyBackendPercent`** (per-Gateway).
+Given each Service's up/down verdict from level 1, this is the minimum percentage
+of a Gateway's *counted* backend services that must be healthy for the route to
+stay advertised. It is evaluated **inclusively**:
 
 ```
 stay advertised  while  (healthy backends / counted backends) * 100  >=  minHealthyBackendPercent
@@ -738,6 +758,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `readvertiseAfter`                 | duration   | `30s`                  | Continuous-healthy time before restoring a route.                           |
 | `resyncInterval`                   | duration   | `10s`                  | Worst-case reconcile cadence between watch events.                          |
 | `minHealthyBackendPercent`         | int (0–100)| `100`                  | Min % of a Gateway's counted backend services that must be healthy to stay advertised (inclusive). 100 = any counted backend down withdraws. See [Multiple backends per Gateway](#multiple-backend-services-per-gateway). |
+| `minHealthyPodPercent`             | int (0–100)| `1`                    | Min % of a backend Service's probed pods that must be Ready for that Service to count as healthy (inclusive). 1 = a single Ready pod keeps it up. Overridable per-Gateway and per-Service. |
 | `paused`                           | bool       | `false`                | Observe-only mode; Beacon takes no withdraw/restore action.                 |
 | `gatewayClassNames`                | []string   | `[]` (all)             | Restrict management to these Gateway classes.                              |
 | `exemptions`                       | []ref      | `[]`                   | Gateways (namespace/name) to exclude.                                       |
@@ -751,6 +772,7 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `beacon.io/withdraw-after`       | duration   | Override `withdrawAfter` for this Gateway.   |
 | `beacon.io/readvertise-after`    | duration   | Override `readvertiseAfter` for this Gateway.|
 | `beacon.io/min-healthy-percent`  | int (0–100)| Override `minHealthyBackendPercent` for this Gateway. |
+| `beacon.io/min-healthy-pod-percent` | int (0–100)| Override `minHealthyPodPercent`. On a **Gateway**: the default for its Services. On a **backend Service**: overrides the Gateway value for that Service. |
 
 ### Manager flags
 

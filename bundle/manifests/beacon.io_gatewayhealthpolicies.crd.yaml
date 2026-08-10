@@ -80,6 +80,19 @@ spec:
                     (inclusive). Default 100 = any counted backend down
                     withdraws. Override per-Gateway with the
                     beacon.io/min-healthy-percent annotation.
+                minHealthyPodPercent:
+                  type: integer
+                  format: int32
+                  default: 1
+                  minimum: 0
+                  maximum: 100
+                  description: |-
+                    Minimum percentage of a backend Service's probed pods that
+                    must be Ready for that Service to count as healthy
+                    (inclusive). Default 1 = a single Ready pod keeps the Service
+                    (and Gateway) up. Override per-Gateway or per-Service with the
+                    beacon.io/min-healthy-pod-percent annotation
+                    (Service > Gateway > this default).
                 paused:
                   type: boolean
                   default: false

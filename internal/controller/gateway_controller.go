@@ -142,9 +142,11 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Trace to services and pods.
+	// Trace to services and pods. The per-Service pod-health threshold defaults
+	// to the Gateway-level value (Services may override via annotation).
 	resolver := &trace.Resolver{Client: r.Client}
-	resolution, err := resolver.Resolve(ctx, gw)
+	gatewayPodPercent := int(policy.MinHealthyPodPercent(gw, spec))
+	resolution, err := resolver.Resolve(ctx, gw, gatewayPodPercent)
 	if err != nil {
 		return ctrl.Result{}, err
 	}

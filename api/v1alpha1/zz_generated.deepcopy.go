@@ -96,6 +96,11 @@ func (in *GatewayHealthPolicySpec) DeepCopyInto(out *GatewayHealthPolicySpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MinHealthyPodPercent != nil {
+		in, out := &in.MinHealthyPodPercent, &out.MinHealthyPodPercent
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Exemptions != nil {
 		in, out := &in.Exemptions, &out.Exemptions
 		*out = make([]GatewayReference, len(*in))
