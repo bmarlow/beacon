@@ -390,9 +390,27 @@ kubectl apply -f config/samples/beacon_v1alpha1_gatewayhealthpolicy.yaml
 ```
 
 > The operator requires **AllNamespaces** install mode (its CRD is
-> cluster-scoped and it holds cluster-wide permissions). It creates its own
-> dashboard `Service`, `Route`, `ConsoleLink`, and oauth-proxy auth resources at
-> startup — no extra manifests needed.
+> cluster-scoped and it holds cluster-wide permissions — see the CSV
+> "Cluster permissions & rationale"). It creates its own dashboard `Service`,
+> `Route`, `ConsoleLink`, metrics `Service`, `ServiceMonitor`, `PrometheusRule`,
+> and oauth-proxy auth resources at startup — no extra manifests needed.
+
+**Upgrade approval.** For production, use a deliberate InstallPlan approval
+strategy on the `Subscription` so cluster admins review each upgrade:
+
+```yaml
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: beacon
+  namespace: beacon
+spec:
+  channel: stable
+  name: beacon
+  source: <your-catalog-source>
+  sourceNamespace: openshift-marketplace
+  installPlanApproval: Manual   # admin approves each upgrade; use Automatic for auto-updates
+```
 
 ### Install with kustomize
 
@@ -669,9 +687,36 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
   # NAME      MANAGED   ADVERTISED   WITHDRAWN   PAUSED   AGE
   # cluster   3         2            1           false    29m
   ```
-- **Metrics**: the manager serves controller-runtime metrics on `:8443`
-  (HTTPS). HTTP/2 is disabled by default to mitigate Rapid Reset (CVE-2023-44487
-  / CVE-2023-39325).
+- **Metrics**: the manager serves Prometheus metrics on `:8443` (HTTPS; HTTP/2
+  disabled to mitigate Rapid Reset CVE-2023-44487 / CVE-2023-39325). Beacon
+  exposes domain metrics in addition to the controller-runtime defaults:
+
+  | Metric | Type | Description |
+  | ------ | ---- | ----------- |
+  | `beacon_managed_gateways` | gauge | Gateways currently managed. |
+  | `beacon_advertised_ips` | gauge | VIPs currently advertised. |
+  | `beacon_withdrawn_ips` | gauge | VIPs currently withdrawn. |
+  | `beacon_gateway_healthy{gateway_namespace,gateway_name}` | gauge | Per-Gateway health (1/0). |
+  | `beacon_gateway_advertised{gateway_namespace,gateway_name}` | gauge | Per-Gateway advertisement (1/0). |
+  | `beacon_withdrawals_total{…}` | counter | Route withdrawals performed. |
+  | `beacon_readvertisements_total{…}` | counter | Route re-advertisements performed. |
+  | `beacon_reconcile_errors_total` | counter | Reconcile errors. |
+
+- **OpenShift monitoring**: the operator provisions a metrics `Service` (with a
+  service-serving cert), a `ServiceMonitor`, and a `PrometheusRule` at startup,
+  so metrics are scraped by **OpenShift user-workload monitoring** and alerts
+  fire out of the box (e.g. `BeaconGatewayVIPWithdrawn`, `BeaconGatewayUnhealthy`,
+  `BeaconManyWithdrawnIPs`, `BeaconReconcileErrors`, `BeaconControllerDown`).
+  Enable user-workload monitoring on the cluster to consume them:
+
+  ```bash
+  oc -n openshift-monitoring get configmap cluster-monitoring-config \
+    || oc -n openshift-monitoring create configmap cluster-monitoring-config \
+       --from-literal=config.yaml='enableUserWorkload: true'
+  ```
+
+  (On non-OpenShift clusters without the Prometheus Operator CRDs, the
+  ServiceMonitor/PrometheusRule are skipped automatically.)
 
 ---
 

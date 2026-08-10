@@ -140,6 +140,18 @@ rules:
       - update
       - patch
   - apiGroups:
+      - monitoring.coreos.com
+    resources:
+      - servicemonitors
+      - prometheusrules
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+  - apiGroups:
       - authorization.k8s.io
     resources:
       - subjectaccessreviews

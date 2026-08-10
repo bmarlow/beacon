@@ -61,8 +61,37 @@ spec:
     ## Configuration
 
     A cluster-scoped singleton `GatewayHealthPolicy` (named `cluster`) controls
-    timers, MetalLB integration, and exemptions. Gateways may also be exempted
-    individually via the `beacon.io/exempt: "true"` annotation.
+    timers, MetalLB integration, exemptions, and the minimum-healthy-backend
+    percentage. Gateways may also be exempted individually via the
+    `beacon.io/exempt: "true"` annotation.
+
+    ## Cluster permissions & rationale
+
+    Beacon requires **AllNamespaces** install mode because its CRD is
+    cluster-scoped and it must observe Gateways/routes/backends across all
+    namespaces. Cluster permissions and why each is needed:
+
+    * `gateways`, `gateway/status`, `gatewayclasses`, `httproutes`, `grpcroutes`,
+      `tcproutes`, `tlsroutes` (read) — discover Gateways and trace their
+      attached routes/backends.
+    * `services` (read/write) — read backend Services; create/own the dashboard
+      & metrics Services.
+    * `pods`, `endpointslices` (read) — evaluate backend workload health.
+    * `deployments` + `deployments/scale` (read/update/**delete**) — scale the
+      Gateway's proxy Deployment to withdraw/restore a VIP (the BGP-safe
+      mechanism), and the `delete` verb is required by the ownerRef admission
+      check for resources the operator garbage-collects.
+    * `ipaddresspools` (read, metallb.io) — attribute Gateway VIPs to MetalLB.
+    * `listeners` (read, skupper.io) — evaluate Skupper-linked remote backends.
+    * `consoles` (read), `routes` (read/write), `consolelinks` (read/write) —
+      discover the console URL and publish/own the dashboard Route + launcher
+      link.
+    * `subjectaccessreviews`, `tokenreviews` (create) — authenticate/authorize
+      dashboard users (oauth-proxy + per-user RBAC filtering).
+    * `secrets`, `serviceaccounts` (read/write) — provision the oauth-proxy
+      cookie secret and SA OAuth redirect annotation.
+    * `servicemonitors`, `prometheusrules` (read/write, monitoring.coreos.com) —
+      wire metrics into OpenShift monitoring.
 
     See the project README for full details.
   keywords:
@@ -183,6 +212,9 @@ spec:
             - apiGroups: ["console.openshift.io"]
               resources: ["consolelinks"]
               verbs: ["get", "list", "watch", "create", "update", "patch"]
+            - apiGroups: ["monitoring.coreos.com"]
+              resources: ["servicemonitors", "prometheusrules"]
+              verbs: ["get", "list", "watch", "create", "update", "patch"]
             - apiGroups: ["authorization.k8s.io"]
               resources: ["subjectaccessreviews"]
               verbs: ["create"]
@@ -243,6 +275,14 @@ spec:
                     secret:
                       secretName: beacon-dashboard-proxy
                       optional: true
+                  # service-ca serving cert for the metrics endpoint (minted once
+                  # the beacon-metrics Service exists). Optional so the pod starts
+                  # before the operator provisions it; controller-runtime
+                  # self-signs until it appears.
+                  - name: metrics-tls
+                    secret:
+                      secretName: beacon-metrics-tls
+                      optional: true
                 containers:
                   - name: manager
                     image: ghcr.io/bmarlow/beacon@sha256:1c3849cbec875f1904a7cb3fe7e2a34457354e20830cef7ad4f59421a5dd9c61
@@ -252,6 +292,7 @@ spec:
                       - --health-probe-bind-address=:8081
                       - --metrics-bind-address=:8443
                       - --metrics-secure=true
+                      - --metrics-cert-dir=/etc/metrics/tls
                       # Dashboard binds to localhost only; it is reachable solely
                       # through the oauth-proxy sidecar.
                       - --dashboard-bind-address=127.0.0.1:8082
@@ -261,6 +302,10 @@ spec:
                         valueFrom:
                           fieldRef:
                             fieldPath: metadata.namespace
+                    volumeMounts:
+                      - name: metrics-tls
+                        mountPath: /etc/metrics/tls
+                        readOnly: true
                     securityContext:
                       allowPrivilegeEscalation: false
                       readOnlyRootFilesystem: true

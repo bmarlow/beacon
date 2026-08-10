@@ -1,0 +1,70 @@
+---
+# Alerting rules for Beacon, evaluated by OpenShift user-workload monitoring.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: beacon-alerts
+  namespace: beacon-system
+  labels:
+    app.kubernetes.io/name: beacon
+    app.kubernetes.io/component: metrics
+spec:
+  groups:
+    - name: beacon.rules
+      rules:
+        - alert: BeaconGatewayVIPWithdrawn
+          expr: beacon_gateway_advertised == 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Beacon has withdrawn a Gateway VIP"
+            description: >-
+              Beacon has withdrawn the MetalLB advertisement for Gateway
+              {{ $labels.gateway_namespace }}/{{ $labels.gateway_name }} for at
+              least 2 minutes because its backends are unhealthy.
+
+        - alert: BeaconGatewayUnhealthy
+          expr: beacon_gateway_healthy == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Beacon Gateway is unhealthy"
+            description: >-
+              Gateway {{ $labels.gateway_namespace }}/{{ $labels.gateway_name }}
+              has been unhealthy for at least 5 minutes.
+
+        - alert: BeaconManyWithdrawnIPs
+          expr: beacon_withdrawn_ips > 0 and (beacon_withdrawn_ips / clamp_min(beacon_managed_gateways, 1)) >= 0.5
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Half or more of Beacon-managed Gateway VIPs are withdrawn"
+            description: >-
+              {{ $value | humanize }} of Beacon's managed Gateway VIPs are
+              currently withdrawn — a large-scale backend outage may be in
+              progress.
+
+        - alert: BeaconReconcileErrors
+          expr: rate(beacon_reconcile_errors_total[5m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Beacon is experiencing reconcile errors"
+            description: >-
+              The Beacon controller has been logging reconcile errors for at
+              least 15 minutes; check the controller-manager logs.
+
+        - alert: BeaconControllerDown
+          expr: up{job="beacon-controller-manager"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Beacon controller-manager metrics endpoint is down"
+            description: >-
+              Prometheus has not been able to scrape the Beacon
+              controller-manager for at least 10 minutes.

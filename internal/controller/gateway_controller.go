@@ -41,6 +41,7 @@ import (
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/advertiser"
 	"github.com/bmarlow/beacon/internal/health"
+	"github.com/bmarlow/beacon/internal/metrics"
 	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/state"
 	"github.com/bmarlow/beacon/internal/trace"
@@ -99,6 +100,7 @@ type gwState struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;prometheusrules,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
@@ -265,6 +267,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 		if healthySince != nil && now.Sub(*healthySince) >= readvertiseAfter {
 			r.event(gw, corev1.EventTypeNormal, "Readvertised",
 				fmt.Sprintf("workload healthy for %s (recovery); restoring MetalLB advertisement for %v", readvertiseAfter, resolution.IPs))
+			metrics.ReadvertisementsTotal.WithLabelValues(gw.Namespace, gw.Name).Inc()
 			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
 			return d, s, nil, err
 		}
@@ -289,6 +292,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 		if unhealthySince != nil && now.Sub(*unhealthySince) >= withdrawAfter {
 			r.event(gw, corev1.EventTypeWarning, "Withdrawn",
 				fmt.Sprintf("workload unhealthy for %s (backoff); withdrawing MetalLB advertisement for %v", withdrawAfter, resolution.IPs))
+			metrics.WithdrawalsTotal.WithLabelValues(gw.Namespace, gw.Name).Inc()
 			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
 			return d, s, nil, err
 		}
@@ -568,8 +572,26 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 			}
 		}
 		gateways = append(gateways, gs)
+
+		// Per-Gateway metric gauges.
+		healthy := 0.0
+		if st.health != beaconv1alpha1.HealthUnhealthy {
+			healthy = 1.0
+		}
+		metrics.GatewayHealthy.WithLabelValues(key.Namespace, key.Name).Set(healthy)
+		adv := 1.0
+		switch st.advertisement {
+		case beaconv1alpha1.AdvertisementWithdrawn, beaconv1alpha1.AdvertisementPendingReadvertise:
+			adv = 0.0
+		}
+		metrics.GatewayAdvertised.WithLabelValues(key.Namespace, key.Name).Set(adv)
 	}
 	r.mu.Unlock()
+
+	// Aggregate metric gauges.
+	metrics.ManagedGateways.Set(float64(managed))
+	metrics.AdvertisedIPs.Set(float64(advertised))
+	metrics.WithdrawnIPs.Set(float64(withdrawn))
 
 	sort.Slice(gateways, func(i, j int) bool {
 		if gateways[i].Namespace != gateways[j].Namespace {

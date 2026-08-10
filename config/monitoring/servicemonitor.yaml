@@ -1,0 +1,28 @@
+---
+# ServiceMonitor for OpenShift user-workload monitoring to scrape Beacon's
+# metrics over HTTPS, verifying the service-serving cert via the cluster
+# service-ca bundle and authenticating with the scraper's bearer token.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: beacon-controller-manager
+  namespace: beacon-system
+  labels:
+    app.kubernetes.io/name: beacon
+    app.kubernetes.io/component: metrics
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: metrics
+      control-plane: controller-manager
+  endpoints:
+    - port: https
+      scheme: https
+      path: /metrics
+      interval: 30s
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        # Verify against the OpenShift service-ca bundle; SNI must match the
+        # in-cluster Service DNS name the serving cert is issued for.
+        caFile: /etc/prometheus/configmaps/serving-certs-ca-bundle/service-ca.crt
+        serverName: beacon-metrics.beacon-system.svc

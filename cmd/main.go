@@ -38,6 +38,8 @@ import (
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/controller"
 	"github.com/bmarlow/beacon/internal/metallb"
+	"github.com/bmarlow/beacon/internal/metrics"
+	"github.com/bmarlow/beacon/internal/monitoring"
 	"github.com/bmarlow/beacon/internal/state"
 	"github.com/bmarlow/beacon/internal/webui"
 	// +kubebuilder:scaffold:imports
@@ -57,6 +59,7 @@ func main() {
 	// +kubebuilder:scaffold:scheme
 
 	var metricsAddr string
+	var metricsCertDir string
 	var enableLeaderElection bool
 	var probeAddr string
 	var secureMetrics bool
@@ -64,6 +67,9 @@ func main() {
 	var dashboardAddr string
 	var dashboardAuthRequired bool
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
+	flag.StringVar(&metricsCertDir, "metrics-cert-dir", "",
+		"Directory containing tls.crt/tls.key for the metrics server (e.g. an "+
+			"OpenShift service-serving cert). When empty, a self-signed cert is used.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager. "+
@@ -91,13 +97,24 @@ func main() {
 		c.NextProtos = []string{"http/1.1"}
 	}
 
+	metricsOpts := metricsserver.Options{
+		BindAddress:   metricsAddr,
+		SecureServing: secureMetrics,
+		TLSOpts:       []func(*tls.Config){disableHTTP2},
+	}
+	// When a metrics serving-cert directory is provided (OpenShift mounts a
+	// service-serving cert here), use it so the ServiceMonitor can verify the
+	// endpoint against the cluster's service-ca bundle. Otherwise
+	// controller-runtime self-signs.
+	if metricsCertDir != "" {
+		metricsOpts.CertDir = metricsCertDir
+		metricsOpts.CertName = "tls.crt"
+		metricsOpts.KeyName = "tls.key"
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
-		Scheme: runtimeScheme,
-		Metrics: metricsserver.Options{
-			BindAddress:   metricsAddr,
-			SecureServing: secureMetrics,
-			TLSOpts:       []func(*tls.Config){disableHTTP2},
-		},
+		Scheme:  runtimeScheme,
+		Metrics: metricsOpts,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			TLSOpts: []func(*tls.Config){disableHTTP2},
 		}),
@@ -112,6 +129,9 @@ func main() {
 
 	// Shared state store: the controller publishes live advertisement/health
 	// decisions; the web UI reads them to annotate the topology graph.
+	// Register Beacon domain metrics on the controller-runtime registry.
+	metrics.MustRegister()
+
 	stateStore := state.New()
 
 	if err := (&controller.GatewayReconciler{
@@ -139,6 +159,16 @@ func main() {
 		rm := webui.NewResourceManager(mgr.GetClient(), port, dashboardAuthRequired, oauthProxyPort)
 		if err := rm.AddToManager(mgr); err != nil {
 			setupLog.Error(err, "unable to register dashboard resource manager")
+			os.Exit(1)
+		}
+	}
+
+	// Wire metrics into OpenShift monitoring: the operator creates the metrics
+	// Service, ServiceMonitor, and PrometheusRule at startup (leader-elected).
+	if mp := dashboardPortFromAddr(metricsAddr); mp > 0 {
+		mon := monitoring.NewManager(mgr.GetClient(), mp)
+		if err := mon.AddToManager(mgr); err != nil {
+			setupLog.Error(err, "unable to register monitoring resource manager")
 			os.Exit(1)
 		}
 	}

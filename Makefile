@@ -97,7 +97,24 @@ bundle: manifests kustomize ## Generate bundle manifests and metadata.
 	operator-sdk generate kustomize manifests -q
 	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/bmarlow/beacon=${IMG}
 	$(KUSTOMIZE) build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION)
+	$(MAKE) sync-bundle-crd
 	operator-sdk bundle validate ./bundle
+
+# CRD source of truth is config/crd/bases. The bundle carries a copy that OLM
+# installs; keep them identical to prevent schema drift (hand-editing the bundle
+# copy previously caused a missing spec field on the cluster).
+CRD_SRC := config/crd/bases/beacon.io_gatewayhealthpolicies.yaml
+CRD_BUNDLE := bundle/manifests/beacon.io_gatewayhealthpolicies.crd.yaml
+
+.PHONY: sync-bundle-crd
+sync-bundle-crd: ## Copy the canonical CRD into the bundle manifests.
+	cp $(CRD_SRC) $(CRD_BUNDLE)
+
+.PHONY: verify-bundle-crd
+verify-bundle-crd: ## Fail if the bundle CRD has drifted from the canonical CRD.
+	@diff -u $(CRD_SRC) $(CRD_BUNDLE) \
+	  && echo "bundle CRD is in sync with config/crd/bases" \
+	  || { echo "ERROR: bundle CRD drifted from $(CRD_SRC). Run 'make sync-bundle-crd'."; exit 1; }
 
 .PHONY: bundle-build
 bundle-build: ## Build the bundle image.
@@ -118,7 +135,7 @@ GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
 .PHONY: controller-gen
 controller-gen: $(LOCALBIN) ## Install controller-gen.
-	test -s $(CONTROLLER_GEN) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.15.0
+	test -s $(CONTROLLER_GEN) || GOBIN=$(LOCALBIN) go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.17.2
 
 .PHONY: kustomize
 kustomize: $(LOCALBIN) ## Install kustomize.

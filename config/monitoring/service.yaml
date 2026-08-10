@@ -1,0 +1,22 @@
+---
+# Metrics Service for the Beacon controller-manager. Annotated so the OpenShift
+# service-ca operator mints a serving certificate the ServiceMonitor can verify.
+apiVersion: v1
+kind: Service
+metadata:
+  name: beacon-metrics
+  namespace: beacon-system
+  labels:
+    app.kubernetes.io/name: beacon
+    app.kubernetes.io/component: metrics
+    control-plane: controller-manager
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: beacon-metrics-tls
+spec:
+  selector:
+    control-plane: controller-manager
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
