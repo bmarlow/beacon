@@ -207,3 +207,44 @@ func TestServiceCritical_Precedence(t *testing.T) {
 		t.Fatal("expected invalid annotation to fall back to gateway true")
 	}
 }
+
+func TestBackendCritical_Precedence(t *testing.T) {
+	tests := []struct {
+		name         string
+		svcAnn       map[string]string
+		routeAny     bool
+		routePresent bool
+		gatewayLevel bool
+		want         bool
+	}{
+		{name: "service true wins over everything", svcAnn: map[string]string{CriticalAnnotation: "true"}, routeAny: false, routePresent: true, gatewayLevel: false, want: true},
+		{name: "service false opts out despite route+gateway", svcAnn: map[string]string{CriticalAnnotation: "false"}, routeAny: true, routePresent: true, gatewayLevel: true, want: false},
+		{name: "route critical when no service annotation", svcAnn: nil, routeAny: true, routePresent: true, gatewayLevel: false, want: true},
+		{name: "route present but not critical overrides gateway true", svcAnn: nil, routeAny: false, routePresent: true, gatewayLevel: true, want: false},
+		{name: "no service, no route -> gateway default true", svcAnn: nil, routeAny: false, routePresent: false, gatewayLevel: true, want: true},
+		{name: "no service, no route -> gateway default false", svcAnn: nil, routeAny: false, routePresent: false, gatewayLevel: false, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := BackendCritical(tc.svcAnn, tc.routeAny, tc.routePresent, tc.gatewayLevel)
+			if got != tc.want {
+				t.Fatalf("BackendCritical = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouteCritical(t *testing.T) {
+	if v, present := RouteCritical(nil); present || v {
+		t.Fatalf("expected absent, got value=%v present=%v", v, present)
+	}
+	if v, present := RouteCritical(map[string]string{CriticalAnnotation: "true"}); !present || !v {
+		t.Fatalf("expected true+present, got value=%v present=%v", v, present)
+	}
+	if v, present := RouteCritical(map[string]string{CriticalAnnotation: "false"}); !present || v {
+		t.Fatalf("expected false+present, got value=%v present=%v", v, present)
+	}
+	if v, present := RouteCritical(map[string]string{CriticalAnnotation: "bogus"}); present || v {
+		t.Fatalf("expected bogus treated as absent, got value=%v present=%v", v, present)
+	}
+}

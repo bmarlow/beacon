@@ -111,6 +111,30 @@ func ServiceCritical(svcAnnotations map[string]string, gatewayLevel bool) bool {
 	return gatewayLevel
 }
 
+// RouteCritical reports whether a route (parsed) is annotated critical, and
+// whether the annotation was present.
+func RouteCritical(routeAnnotations map[string]string) (value bool, present bool) {
+	return parseBoolAnnotation(routeAnnotations, CriticalAnnotation)
+}
+
+// BackendCritical resolves whether a backend is critical, applying the full
+// precedence: Service annotation > Route annotation > Gateway-level default.
+//
+// A backend Service may be reached via more than one route; routeCriticalAny is
+// true when ANY route attaching this backend to the Gateway is marked critical
+// (and routeCriticalPresent true when at least one such route carries the
+// annotation). An explicit Service annotation (including "false") always wins,
+// letting a Service owner opt in or out regardless of route/gateway settings.
+func BackendCritical(svcAnnotations map[string]string, routeCriticalAny, routeCriticalPresent, gatewayLevel bool) bool {
+	if b, ok := parseBoolAnnotation(svcAnnotations, CriticalAnnotation); ok {
+		return b
+	}
+	if routeCriticalPresent {
+		return routeCriticalAny
+	}
+	return gatewayLevel
+}
+
 // parseBoolAnnotation parses a boolean annotation, returning the value and
 // whether it was present and parseable.
 func parseBoolAnnotation(annotations map[string]string, key string) (bool, bool) {

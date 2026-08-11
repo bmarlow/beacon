@@ -83,6 +83,10 @@ type routeInfo struct {
 	namespace string
 	hostnames []string
 	backends  []types.NamespacedName
+	// criticalAnn / criticalPresent capture the route's beacon.io/critical
+	// annotation (for the Service > Route > Gateway precedence).
+	criticalAnn     bool
+	criticalPresent bool
 }
 
 // Build produces a full topology Graph.
@@ -401,7 +405,7 @@ func (b *Builder) buildGatewayNode(
 				} else {
 					remote.Status = StatusUnhealthy
 				}
-				sn.Critical = policy.ServiceCritical(svc.Annotations, gatewayCritical)
+				sn.Critical = policy.BackendCritical(svc.Annotations, ri.criticalAnn, ri.criticalPresent, gatewayCritical)
 				svcHealths = append(svcHealths, health.ServiceHealth{
 					Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
 					Critical: sn.Critical,
@@ -460,7 +464,7 @@ func (b *Builder) buildGatewayNode(
 				}
 			}
 			sn.ScaledToZero = svcScaledToZero
-			sn.Critical = policy.ServiceCritical(svc.Annotations, gatewayCritical)
+			sn.Critical = policy.BackendCritical(svc.Annotations, ri.criticalAnn, ri.criticalPresent, gatewayCritical)
 			svcHealths = append(svcHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name,
 				Counted:  svcCounted,
@@ -562,6 +566,7 @@ func (b *Builder) indexRoutes(ctx context.Context) (map[types.NamespacedName][]r
 	for i := range httpRoutes.Items {
 		rt := &httpRoutes.Items[i]
 		ri := routeInfo{kind: "HTTPRoute", name: rt.Name, namespace: rt.Namespace}
+		ri.criticalAnn, ri.criticalPresent = policy.RouteCritical(rt.Annotations)
 		for _, h := range rt.Spec.Hostnames {
 			ri.hostnames = append(ri.hostnames, string(h))
 		}
@@ -582,6 +587,7 @@ func (b *Builder) indexRoutes(ctx context.Context) (map[types.NamespacedName][]r
 	for i := range grpcRoutes.Items {
 		rt := &grpcRoutes.Items[i]
 		ri := routeInfo{kind: "GRPCRoute", name: rt.Name, namespace: rt.Namespace}
+		ri.criticalAnn, ri.criticalPresent = policy.RouteCritical(rt.Annotations)
 		for _, h := range rt.Spec.Hostnames {
 			ri.hostnames = append(ri.hostnames, string(h))
 		}
@@ -602,6 +608,7 @@ func (b *Builder) indexRoutes(ctx context.Context) (map[types.NamespacedName][]r
 	for i := range tcpRoutes.Items {
 		rt := &tcpRoutes.Items[i]
 		ri := routeInfo{kind: "TCPRoute", name: rt.Name, namespace: rt.Namespace}
+		ri.criticalAnn, ri.criticalPresent = policy.RouteCritical(rt.Annotations)
 		for _, rule := range rt.Spec.Rules {
 			for _, br := range rule.BackendRefs {
 				if ref, ok := serviceRef(br.BackendObjectReference, rt.Namespace); ok {
@@ -619,6 +626,7 @@ func (b *Builder) indexRoutes(ctx context.Context) (map[types.NamespacedName][]r
 	for i := range tlsRoutes.Items {
 		rt := &tlsRoutes.Items[i]
 		ri := routeInfo{kind: "TLSRoute", name: rt.Name, namespace: rt.Namespace}
+		ri.criticalAnn, ri.criticalPresent = policy.RouteCritical(rt.Annotations)
 		for _, h := range rt.Spec.Hostnames {
 			ri.hostnames = append(ri.hostnames, string(h))
 		}

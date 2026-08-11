@@ -228,3 +228,79 @@ func TestResolve_CrossNamespaceBackend(t *testing.T) {
 }
 
 var _ client.Client = (client.Client)(nil)
+
+// TestResolve_RouteCriticalMarksBackend verifies that a route annotated
+// beacon.io/critical: "true" makes its backend Service critical in the resolved
+// ServiceHealths, even though the Service itself carries no annotation.
+func TestResolve_RouteCriticalMarksBackend(t *testing.T) {
+	s := newScheme(t)
+	ns := "app"
+
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: ns},
+		Status: gwapiv1.GatewayStatus{
+			Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.30"}},
+		},
+	}
+	backendSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-svc", Namespace: ns},
+		Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "demo"}},
+	}
+	// A probed, ready pod so the backend is counted+healthy.
+	backendPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-pod", Namespace: ns},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name: "c", ReadinessProbe: &corev1.Probe{},
+		}}},
+		Status: corev1.PodStatus{
+			Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}},
+		},
+	}
+	slice := &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "app-svc-slice",
+			Namespace: ns,
+			Labels:    map[string]string{discoveryv1.LabelServiceName: "app-svc"},
+		},
+		Endpoints: []discoveryv1.Endpoint{{
+			TargetRef: &corev1.ObjectReference{Kind: "Pod", Name: "app-pod", Namespace: ns},
+		}},
+	}
+	// The route carries the critical annotation.
+	route := &gwapiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "route", Namespace: ns,
+			Annotations: map[string]string{"beacon.io/critical": "true"},
+		},
+		Spec: gwapiv1.HTTPRouteSpec{
+			CommonRouteSpec: gwapiv1.CommonRouteSpec{
+				ParentRefs: []gwapiv1.ParentReference{{Name: "gw"}},
+			},
+			Rules: []gwapiv1.HTTPRouteRule{{
+				BackendRefs: []gwapiv1.HTTPBackendRef{{
+					BackendRef: gwapiv1.BackendRef{
+						BackendObjectReference: gwapiv1.BackendObjectReference{Name: "app-svc"},
+					},
+				}},
+			}},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(gw, backendSvc, backendPod, slice, route).Build()
+
+	res, err := (&Resolver{Client: cl}).Resolve(context.Background(), gw, 1, beaconv1alpha1.ZeroReplicasUnhealthy)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if len(res.ServiceHealths) != 1 {
+		t.Fatalf("expected 1 service health, got %d", len(res.ServiceHealths))
+	}
+	sh := res.ServiceHealths[0]
+	if !sh.Critical {
+		t.Fatalf("expected backend marked critical via route annotation, got %+v", sh)
+	}
+	if !sh.Counted || !sh.Healthy {
+		t.Fatalf("expected counted+healthy backend, got %+v", sh)
+	}
+}

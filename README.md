@@ -235,9 +235,16 @@ being down triggers withdrawal.
   scaled-to-zero backend under the default `zeroReplicasPolicy`, or a Skupper
   link that is down). A critical Service with *no* health signal
   (probe-less/selector-less) can't be judged and does not force withdrawal.
-- Set `beacon.io/critical: "true"` on the **Gateway** to make *all* of its
-  backends critical by default; a per-Service annotation overrides it
-  (Service > Gateway).
+- `beacon.io/critical` may be set on the **Service**, the **Route**
+  (HTTPRoute/GRPCRoute/TCPRoute/TLSRoute), or the **Gateway**, with precedence
+  **Service > Route > Gateway**:
+  - On a **Service** — flags just that backend. An explicit value (including
+    `"false"`) always wins, letting a Service owner opt in or out regardless of
+    route/gateway settings.
+  - On a **Route** — flags every backend that route points at (useful when the
+    route is the unit an app team owns). If a Service is reached by several
+    routes, it is critical when *any* attaching route marks it so.
+  - On a **Gateway** — makes *all* of its backends critical by default.
 - The dashboard badges critical backends with a red **CRITICAL** chip, and
   badges the Gateway with **CRITICAL DOWN** when a critical backend caused the
   withdrawal.
@@ -817,7 +824,7 @@ Gateway-level default for that Service (precedence: Service > Gateway > policy).
 | `beacon.io/min-healthy-percent`  | int (0–100)| Override `minHealthyBackendPercent` for this Gateway. |
 | `beacon.io/min-healthy-pod-percent` | int (0–100)| *(Gateway or Service)* Override `minHealthyPodPercent`. On a Gateway: the default for its Services. On a Service: overrides the Gateway value for that Service. |
 | `beacon.io/zero-replicas-policy` | `Unhealthy`\|`Exempt` | *(Gateway or Service)* Override `zeroReplicasPolicy`. On a Gateway: the default for its Services. On a Service: overrides the Gateway value for that Service. |
-| `beacon.io/critical`             | `"true"`\|`"false"` | *(Gateway or Service)* Mark a backend as **critical**: if it goes down, the whole Gateway is withdrawn regardless of `minHealthyBackendPercent`. On a Gateway: makes all its backends critical by default; a Service annotation overrides it. |
+| `beacon.io/critical`             | `"true"`\|`"false"` | *(Gateway, Route, or Service)* Mark a backend as **critical**: if it goes down, the whole Gateway is withdrawn regardless of `minHealthyBackendPercent`. On a Route: flags all backends that route points at. On a Gateway: makes all its backends critical by default. Precedence: Service > Route > Gateway. |
 
 ### Manager flags
 

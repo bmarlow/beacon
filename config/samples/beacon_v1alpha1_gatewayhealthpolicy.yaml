@@ -31,10 +31,12 @@ spec:
   # Override per-Gateway or per-Service with the beacon.io/zero-replicas-policy
   # annotation (Service > Gateway > this).
   zeroReplicasPolicy: Unhealthy
-  # Critical backends are not a policy field — flag them per-Service (or per
-  # Gateway) with the annotation  beacon.io/critical: "true"  . If a critical
-  # backend goes down, the whole Gateway is withdrawn regardless of
-  # minHealthyBackendPercent. Example on a backend Service:
+  # Critical backends are not a policy field — flag them with the annotation
+  #   beacon.io/critical: "true"
+  # on a backend Service, a Route (HTTPRoute/GRPCRoute/TCPRoute/TLSRoute), or the
+  # Gateway. If a critical backend goes down, the whole Gateway is withdrawn
+  # regardless of minHealthyBackendPercent. Precedence: Service > Route > Gateway.
+  # Example on a backend Service (or Route):
   #   metadata:
   #     annotations:
   #       beacon.io/critical: "true"

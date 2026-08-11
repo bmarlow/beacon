@@ -147,7 +147,7 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 
 	// 2. Discover the BACKEND Services referenced by xRoutes attached to this
 	//    Gateway.
-	backendSvcs, err := r.findBackendServices(ctx, gw)
+	backendSvcs, routeCrit, err := r.findBackendServices(ctx, gw)
 	if err != nil {
 		return nil, fmt.Errorf("finding backend services for gateway %s/%s: %w", gw.Namespace, gw.Name, err)
 	}
@@ -157,6 +157,10 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 	//    Skupper-backed Services are evaluated via their Listener instead.
 	//    Also compute per-Service health for the minimum-healthy-percentage rule.
 	seen := map[types.NamespacedName]struct{}{}
+	critical := func(svc *corev1.Service) bool {
+		rc := routeCrit[types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}]
+		return policy.BackendCritical(svc.Annotations, rc.Any, rc.Present, gatewayCritical)
+	}
 	for i := range backendSvcs {
 		svc := &backendSvcs[i]
 		if lname, ok := skupper.ServiceListenerName(svc.Labels); ok {
@@ -168,7 +172,7 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 			// A Skupper backend always counts; healthy iff the link is ready.
 			res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
-				Critical: policy.ServiceCritical(svc.Annotations, gatewayCritical),
+				Critical: critical(svc),
 			})
 			continue
 		}
@@ -192,7 +196,7 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 			Namespace: svc.Namespace, Name: svc.Name,
 			Counted:  counted,
 			Healthy:  healthy,
-			Critical: policy.ServiceCritical(svc.Annotations, gatewayCritical),
+			Critical: critical(svc),
 		})
 		for j := range pods {
 			key := types.NamespacedName{Namespace: pods[j].Namespace, Name: pods[j].Name}
@@ -274,25 +278,48 @@ type backendRef struct {
 	name      string
 }
 
+// routeCritInfo accumulates, for a backend ref, whether any attaching route is
+// marked critical and whether at least one such route carries the annotation.
+// Used to resolve route-level criticality (precedence: Service > Route >
+// Gateway).
+type routeCritInfo struct {
+	// present is true when at least one route referencing this backend carries
+	// the beacon.io/critical annotation.
+	present bool
+	// any is true when at least one such route sets it to a truthy value.
+	any bool
+}
+
+// BackendRouteCritical resolves whether a Service's attaching route(s) mark it
+// critical. Callers combine this with the Service/Gateway settings via
+// policy.BackendCritical.
+type BackendRouteCritical struct {
+	Present bool
+	Any     bool
+}
+
 // findBackendServices collects the backend Services referenced by all xRoutes
 // (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute) whose parentRefs attach them to
-// this Gateway. Only backends of kind Service (core group) are considered.
-func (r *Resolver) findBackendServices(ctx context.Context, gw *gwapiv1.Gateway) ([]corev1.Service, error) {
-	refs := map[backendRef]struct{}{}
+// this Gateway. Only backends of kind Service (core group) are considered. It
+// also returns, per resolved Service, the accumulated route-level critical
+// annotation info (a Service can be referenced by multiple routes).
+func (r *Resolver) findBackendServices(ctx context.Context, gw *gwapiv1.Gateway) ([]corev1.Service, map[types.NamespacedName]BackendRouteCritical, error) {
+	refs := map[backendRef]*routeCritInfo{}
 
 	// HTTPRoutes (gateway.networking.k8s.io/v1)
 	httpRoutes := &gwapiv1.HTTPRouteList{}
 	if err := r.listRoutes(ctx, httpRoutes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range httpRoutes.Items {
 		rt := &httpRoutes.Items[i]
 		if !routeAttachedToGateway(rt.Spec.ParentRefs, rt.Namespace, gw) {
 			continue
 		}
+		crit, present := policy.RouteCritical(rt.Annotations)
 		for _, rule := range rt.Spec.Rules {
 			for _, b := range rule.BackendRefs {
-				addServiceRef(refs, b.BackendObjectReference, rt.Namespace)
+				addServiceRef(refs, b.BackendObjectReference, rt.Namespace, crit, present)
 			}
 		}
 	}
@@ -300,16 +327,17 @@ func (r *Resolver) findBackendServices(ctx context.Context, gw *gwapiv1.Gateway)
 	// GRPCRoutes (gateway.networking.k8s.io/v1)
 	grpcRoutes := &gwapiv1.GRPCRouteList{}
 	if err := r.listRoutes(ctx, grpcRoutes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range grpcRoutes.Items {
 		rt := &grpcRoutes.Items[i]
 		if !routeAttachedToGateway(rt.Spec.ParentRefs, rt.Namespace, gw) {
 			continue
 		}
+		crit, present := policy.RouteCritical(rt.Annotations)
 		for _, rule := range rt.Spec.Rules {
 			for _, b := range rule.BackendRefs {
-				addServiceRef(refs, b.BackendObjectReference, rt.Namespace)
+				addServiceRef(refs, b.BackendObjectReference, rt.Namespace, crit, present)
 			}
 		}
 	}
@@ -317,16 +345,17 @@ func (r *Resolver) findBackendServices(ctx context.Context, gw *gwapiv1.Gateway)
 	// TCPRoutes (gateway.networking.k8s.io/v1alpha2) - optional CRD.
 	tcpRoutes := &gwapiv1alpha2.TCPRouteList{}
 	if err := r.listRoutes(ctx, tcpRoutes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range tcpRoutes.Items {
 		rt := &tcpRoutes.Items[i]
 		if !routeAttachedToGateway(rt.Spec.ParentRefs, rt.Namespace, gw) {
 			continue
 		}
+		crit, present := policy.RouteCritical(rt.Annotations)
 		for _, rule := range rt.Spec.Rules {
 			for _, b := range rule.BackendRefs {
-				addServiceRef(refs, b.BackendObjectReference, rt.Namespace)
+				addServiceRef(refs, b.BackendObjectReference, rt.Namespace, crit, present)
 			}
 		}
 	}
@@ -334,33 +363,37 @@ func (r *Resolver) findBackendServices(ctx context.Context, gw *gwapiv1.Gateway)
 	// TLSRoutes (gateway.networking.k8s.io/v1alpha2) - optional CRD.
 	tlsRoutes := &gwapiv1alpha2.TLSRouteList{}
 	if err := r.listRoutes(ctx, tlsRoutes); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for i := range tlsRoutes.Items {
 		rt := &tlsRoutes.Items[i]
 		if !routeAttachedToGateway(rt.Spec.ParentRefs, rt.Namespace, gw) {
 			continue
 		}
+		crit, present := policy.RouteCritical(rt.Annotations)
 		for _, rule := range rt.Spec.Rules {
 			for _, b := range rule.BackendRefs {
-				addServiceRef(refs, b.BackendObjectReference, rt.Namespace)
+				addServiceRef(refs, b.BackendObjectReference, rt.Namespace, crit, present)
 			}
 		}
 	}
 
 	// Resolve the collected refs into Service objects.
 	var out []corev1.Service
-	for ref := range refs {
+	critByService := map[types.NamespacedName]BackendRouteCritical{}
+	for ref, info := range refs {
+		key := types.NamespacedName{Namespace: ref.namespace, Name: ref.name}
 		svc := &corev1.Service{}
-		if err := r.Client.Get(ctx, types.NamespacedName{Namespace: ref.namespace, Name: ref.name}, svc); err != nil {
+		if err := r.Client.Get(ctx, key, svc); err != nil {
 			if client.IgnoreNotFound(err) != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			continue // backend Service missing; skip
 		}
 		out = append(out, *svc)
+		critByService[key] = BackendRouteCritical{Present: info.present, Any: info.any}
 	}
-	return out, nil
+	return out, critByService, nil
 }
 
 // listRoutes lists a route kind, tolerating clusters where that route CRD is
@@ -378,8 +411,10 @@ func (r *Resolver) listRoutes(ctx context.Context, list client.ObjectList) error
 	return err
 }
 
-// addServiceRef records a backend reference if it points at a core Service.
-func addServiceRef(refs map[backendRef]struct{}, ref gwapiv1.BackendObjectReference, routeNamespace string) {
+// addServiceRef records a backend reference if it points at a core Service,
+// merging the referencing route's critical annotation into the ref's accumulated
+// route-critical info.
+func addServiceRef(refs map[backendRef]*routeCritInfo, ref gwapiv1.BackendObjectReference, routeNamespace string, routeCritical, routeCriticalPresent bool) {
 	// Kind defaults to "Service"; group defaults to core ("").
 	if ref.Kind != nil && string(*ref.Kind) != "Service" {
 		return
@@ -391,7 +426,18 @@ func addServiceRef(refs map[backendRef]struct{}, ref gwapiv1.BackendObjectRefere
 	if ref.Namespace != nil && string(*ref.Namespace) != "" {
 		ns = string(*ref.Namespace)
 	}
-	refs[backendRef{namespace: ns, name: string(ref.Name)}] = struct{}{}
+	key := backendRef{namespace: ns, name: string(ref.Name)}
+	info := refs[key]
+	if info == nil {
+		info = &routeCritInfo{}
+		refs[key] = info
+	}
+	if routeCriticalPresent {
+		info.present = true
+		if routeCritical {
+			info.any = true
+		}
+	}
 }
 
 // routeAttachedToGateway reports whether any of the route's parentRefs targets
