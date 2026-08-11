@@ -198,10 +198,15 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		"healthyBackends", decision.Healthy,
 		"healthyPercent", decision.HealthyPercent,
 		"threshold", threshold,
+		"criticalDown", decision.CriticalDown,
 		"remoteBackends", len(resolution.RemoteBackends),
 		"ips", resolution.IPs,
 		"fromMetalLB", fromMetalLB,
 	)
+	if decision.CriticalDown {
+		logger.Info("gateway has a critical backend down; forcing withdrawal regardless of min-healthy-backend threshold",
+			"gateway", req.NamespacedName.String())
+	}
 
 	// If IPs are not from MetalLB, we observe but never mutate advertisements.
 	if !fromMetalLB || len(resolution.IPs) == 0 {

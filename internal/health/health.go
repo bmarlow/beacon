@@ -117,6 +117,11 @@ type ServiceHealth struct {
 	Counted bool
 	// Healthy is meaningful only when Counted; true when the backend is up.
 	Healthy bool
+	// Critical marks a backend whose failure must take the whole Gateway down
+	// regardless of the minimum-healthy-backend percentage. A critical backend
+	// only forces withdrawal when it is Counted (has a health signal) and not
+	// Healthy.
+	Critical bool
 }
 
 // GatewayDecision is the aggregate outcome for a Gateway given its per-service
@@ -130,10 +135,15 @@ type GatewayDecision struct {
 	// Threshold is the configured minimum healthy percentage (inclusive).
 	Threshold int
 	// Unhealthy is true when the Gateway should be withdrawn: it has at least
-	// one counted backend and the healthy ratio is strictly below Threshold.
+	// one counted backend and the healthy ratio is strictly below Threshold, OR
+	// a critical backend is down (see CriticalDown).
 	Unhealthy bool
 	// Exempt is true when no backend is counted (nothing to health-check).
 	Exempt bool
+	// CriticalDown is true when at least one backend flagged critical is counted
+	// and unhealthy. When set, the Gateway is Unhealthy regardless of the
+	// healthy-backend ratio.
+	CriticalDown bool
 }
 
 // EvaluateGateway applies the minimum-healthy-backend-percentage rule to a set
@@ -146,6 +156,11 @@ type GatewayDecision struct {
 // and is Unhealthy when the ratio drops below the threshold. With threshold=100
 // (the default) any single counted backend going down makes the Gateway
 // Unhealthy. When no backend is counted, the Gateway is Exempt.
+//
+// Critical backends override the ratio: if any backend flagged Critical is
+// counted and unhealthy, the Gateway is Unhealthy no matter how many other
+// backends are up (CriticalDown=true). A critical backend that is not counted
+// (no health signal) cannot be judged and does not force withdrawal.
 func EvaluateGateway(services []ServiceHealth, thresholdPercent int) GatewayDecision {
 	d := GatewayDecision{Threshold: thresholdPercent}
 	for _, s := range services {
@@ -155,6 +170,8 @@ func EvaluateGateway(services []ServiceHealth, thresholdPercent int) GatewayDeci
 		d.Counted++
 		if s.Healthy {
 			d.Healthy++
+		} else if s.Critical {
+			d.CriticalDown = true
 		}
 	}
 	if d.Counted == 0 {
@@ -163,7 +180,8 @@ func EvaluateGateway(services []ServiceHealth, thresholdPercent int) GatewayDeci
 	}
 	d.HealthyPercent = (100 * d.Healthy) / d.Counted
 	// Inclusive: stay up while healthy% >= threshold; withdraw when below.
-	d.Unhealthy = d.HealthyPercent < thresholdPercent
+	// A downed critical backend forces withdrawal regardless of the ratio.
+	d.Unhealthy = d.CriticalDown || d.HealthyPercent < thresholdPercent
 	return d
 }
 

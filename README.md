@@ -222,6 +222,34 @@ crossed, the usual dampening + proxy-drain withdraw/re-advertise applies.
 > the threshold) remains **advertised**; only **Unhealthy** (below threshold)
 > triggers withdrawal.
 
+**3. Critical backends — `beacon.io/critical`.** Some backends are
+load-bearing: if they go down, the Gateway is useless even if the healthy-ratio
+still looks fine. Annotate such a backend Service with
+`beacon.io/critical: "true"` and Beacon will take the **whole Gateway down**
+(withdraw the VIP) the moment that Service becomes unavailable — *regardless* of
+`minHealthyBackendPercent`. Multiple backends can be flagged; any one of them
+being down triggers withdrawal.
+
+- A critical backend forces withdrawal only when it is **counted and
+  unhealthy** (it has a health signal that says "down", including a
+  scaled-to-zero backend under the default `zeroReplicasPolicy`, or a Skupper
+  link that is down). A critical Service with *no* health signal
+  (probe-less/selector-less) can't be judged and does not force withdrawal.
+- Set `beacon.io/critical: "true"` on the **Gateway** to make *all* of its
+  backends critical by default; a per-Service annotation overrides it
+  (Service > Gateway).
+- The dashboard badges critical backends with a red **CRITICAL** chip, and
+  badges the Gateway with **CRITICAL DOWN** when a critical backend caused the
+  withdrawal.
+
+Example — a Gateway with `minHealthyBackendPercent: 50` and 4 backends, one of
+which (`payments`) is marked critical:
+
+| State | Ratio verdict | Critical verdict | Result |
+| ----- | ------------- | ---------------- | ------ |
+| `payments` up, 1 other down | 75% ≥ 50% → up | ok | advertised (Degraded) |
+| `payments` **down**, all others up | 75% ≥ 50% → up | **critical down** | **withdrawn** |
+
 ### Withdrawing without flapping BGP (proxy-drain)
 
 This is the core safety property, and it works **with** MetalLB's design rather
@@ -775,7 +803,11 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `exemptions`                       | []ref      | `[]`                   | Gateways (namespace/name) to exclude.                                       |
 | `metallb.namespace`                | string     | `metallb-system`       | Namespace whose `IPAddressPool`s are read to attribute Gateway VIPs to MetalLB. |
 
-### Annotations (on `Gateway`)
+### Annotations
+
+Placed on a **Gateway** unless noted. Annotations marked *(Gateway or Service)*
+may also be set on a backend Service, where the Service value overrides the
+Gateway-level default for that Service (precedence: Service > Gateway > policy).
 
 | Annotation                       | Values     | Effect                                       |
 | -------------------------------- | ---------- | -------------------------------------------- |
@@ -783,8 +815,9 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `beacon.io/withdraw-after`       | duration   | Override `withdrawAfter` for this Gateway.   |
 | `beacon.io/readvertise-after`    | duration   | Override `readvertiseAfter` for this Gateway.|
 | `beacon.io/min-healthy-percent`  | int (0–100)| Override `minHealthyBackendPercent` for this Gateway. |
-| `beacon.io/min-healthy-pod-percent` | int (0–100)| Override `minHealthyPodPercent`. On a **Gateway**: the default for its Services. On a **backend Service**: overrides the Gateway value for that Service. |
-| `beacon.io/zero-replicas-policy` | `Unhealthy`\|`Exempt` | Override `zeroReplicasPolicy`. On a **Gateway**: the default for its Services. On a **backend Service**: overrides the Gateway value for that Service. |
+| `beacon.io/min-healthy-pod-percent` | int (0–100)| *(Gateway or Service)* Override `minHealthyPodPercent`. On a Gateway: the default for its Services. On a Service: overrides the Gateway value for that Service. |
+| `beacon.io/zero-replicas-policy` | `Unhealthy`\|`Exempt` | *(Gateway or Service)* Override `zeroReplicasPolicy`. On a Gateway: the default for its Services. On a Service: overrides the Gateway value for that Service. |
+| `beacon.io/critical`             | `"true"`\|`"false"` | *(Gateway or Service)* Mark a backend as **critical**: if it goes down, the whole Gateway is withdrawn regardless of `minHealthyBackendPercent`. On a Gateway: makes all its backends critical by default; a Service annotation overrides it. |
 
 ### Manager flags
 

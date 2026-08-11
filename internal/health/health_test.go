@@ -158,6 +158,79 @@ func TestEvaluateService_ScaledToZero(t *testing.T) {
 	}
 }
 
+func TestEvaluateGateway_Critical(t *testing.T) {
+	tests := []struct {
+		name          string
+		services      []ServiceHealth
+		threshold     int
+		wantUnhealthy bool
+		wantCritical  bool
+		wantExempt    bool
+	}{
+		{
+			name: "critical backend down forces unhealthy despite ratio",
+			services: []ServiceHealth{
+				{Counted: true, Healthy: true},
+				{Counted: true, Healthy: true},
+				{Counted: true, Healthy: false, Critical: true},
+			},
+			threshold:     50, // 2/3 = 66% >= 50% would normally stay up
+			wantUnhealthy: true,
+			wantCritical:  true,
+		},
+		{
+			name: "critical backend healthy -> normal ratio applies (stays up)",
+			services: []ServiceHealth{
+				{Counted: true, Healthy: true, Critical: true},
+				{Counted: true, Healthy: false},
+			},
+			threshold:     50, // 1/2 = 50% >= 50% inclusive
+			wantUnhealthy: false,
+			wantCritical:  false,
+		},
+		{
+			name: "non-critical backend down below threshold -> unhealthy, not critical",
+			services: []ServiceHealth{
+				{Counted: true, Healthy: false},
+				{Counted: true, Healthy: true},
+			},
+			threshold:     100,
+			wantUnhealthy: true,
+			wantCritical:  false,
+		},
+		{
+			name: "critical backend not counted -> cannot judge; does not force down",
+			services: []ServiceHealth{
+				{Counted: false, Healthy: false, Critical: true},
+				{Counted: true, Healthy: true},
+			},
+			threshold:     100,
+			wantUnhealthy: false,
+			wantCritical:  false,
+		},
+		{
+			name:       "all critical but none counted -> exempt",
+			services:   []ServiceHealth{{Counted: false, Critical: true}},
+			threshold:  100,
+			wantExempt: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := EvaluateGateway(tc.services, tc.threshold)
+			if d.Unhealthy != tc.wantUnhealthy {
+				t.Errorf("Unhealthy = %v, want %v", d.Unhealthy, tc.wantUnhealthy)
+			}
+			if d.CriticalDown != tc.wantCritical {
+				t.Errorf("CriticalDown = %v, want %v", d.CriticalDown, tc.wantCritical)
+			}
+			if d.Exempt != tc.wantExempt {
+				t.Errorf("Exempt = %v, want %v", d.Exempt, tc.wantExempt)
+			}
+		})
+	}
+}
+
 func TestEvaluate_TerminatingIgnored(t *testing.T) {
 	p := podWithProbe("a", false)
 	now := metav1.Now()

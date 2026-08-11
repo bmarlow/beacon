@@ -166,13 +166,16 @@ type GatewayNode struct {
 	// HealthyBackends / CountedBackends are the numerator / denominator of the
 	// min-healthy-backend-percentage evaluation. MinHealthyPercent is the
 	// effective threshold (inclusive) for this Gateway.
-	HealthyBackends   int32       `json:"healthyBackends"`
-	CountedBackends   int32       `json:"countedBackends"`
-	MinHealthyPercent int32       `json:"minHealthyPercent"`
-	Routes            []RouteNode `json:"routes"`
-	Status            Status      `json:"status"`
-	StatusTiming      `json:",inline"`
-	Ref               *Ref `json:"ref,omitempty"`
+	HealthyBackends   int32 `json:"healthyBackends"`
+	CountedBackends   int32 `json:"countedBackends"`
+	MinHealthyPercent int32 `json:"minHealthyPercent"`
+	// CriticalBackendDown is true when a backend flagged critical is down, which
+	// forces the Gateway Unhealthy (VIP withdrawn) regardless of the ratio.
+	CriticalBackendDown bool        `json:"criticalBackendDown,omitempty"`
+	Routes              []RouteNode `json:"routes"`
+	Status              Status      `json:"status"`
+	StatusTiming        `json:",inline"`
+	Ref                 *Ref `json:"ref,omitempty"`
 	// Timer describes a running dampening timer (backoff/recovery), if any.
 	Timer *Timer `json:"timer,omitempty"`
 }
@@ -224,8 +227,12 @@ type ServiceNode struct {
 	Skupper *SkupperInfo `json:"skupper,omitempty"`
 	// ScaledToZero is true when the Service has a selector but zero pods and the
 	// effective zeroReplicasPolicy treats that as unhealthy.
-	ScaledToZero bool      `json:"scaledToZero,omitempty"`
-	Pods         []PodNode `json:"pods"`
+	ScaledToZero bool `json:"scaledToZero,omitempty"`
+	// Critical marks a backend whose failure takes the whole Gateway down
+	// (VIP withdrawn) regardless of the min-healthy-backend threshold. The UI
+	// badges these so operators can see which backends are load-bearing.
+	Critical bool      `json:"critical,omitempty"`
+	Pods     []PodNode `json:"pods"`
 }
 
 // SkupperInfo describes a Skupper-linked (remote) backend.

@@ -56,6 +56,13 @@ const (
 	// override how a scaled-to-zero backend is treated: "Unhealthy" or "Exempt".
 	OverrideZeroReplicasPolicyAnnotation = "beacon.io/zero-replicas-policy"
 
+	// CriticalAnnotation, when set to "true" on a backend Service, marks that
+	// Service as critical: if it becomes unavailable, the whole Gateway is taken
+	// down (VIP withdrawn) regardless of minHealthyBackendPercent. Set on a
+	// Gateway, it makes every one of that Gateway's backends critical by default
+	// (a Service annotation overrides the Gateway-level value).
+	CriticalAnnotation = "beacon.io/critical"
+
 	// DefaultMinHealthyBackendPercent is used when neither the policy nor an
 	// annotation specifies one: 100% (any counted backend down withdraws).
 	DefaultMinHealthyBackendPercent int32 = 100
@@ -85,6 +92,37 @@ func ServiceZeroReplicasPolicy(svcAnnotations map[string]string, gatewayLevel be
 		return p
 	}
 	return gatewayLevel
+}
+
+// GatewayCritical reports whether the Gateway is annotated to treat all of its
+// backends as critical by default.
+func GatewayCritical(gw *gwapiv1.Gateway) bool {
+	b, _ := parseBoolAnnotation(gw.Annotations, CriticalAnnotation)
+	return b
+}
+
+// ServiceCritical reports whether a backend Service is critical, applying
+// precedence: Service annotation > Gateway-level default. A critical backend,
+// when it is counted and unhealthy, forces the whole Gateway Unhealthy.
+func ServiceCritical(svcAnnotations map[string]string, gatewayLevel bool) bool {
+	if b, ok := parseBoolAnnotation(svcAnnotations, CriticalAnnotation); ok {
+		return b
+	}
+	return gatewayLevel
+}
+
+// parseBoolAnnotation parses a boolean annotation, returning the value and
+// whether it was present and parseable.
+func parseBoolAnnotation(annotations map[string]string, key string) (bool, bool) {
+	v, ok := annotations[key]
+	if !ok || strings.TrimSpace(v) == "" {
+		return false, false
+	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		return false, false
+	}
+	return b, true
 }
 
 func parseZeroReplicasPolicy(annotations map[string]string) (beaconv1alpha1.ZeroReplicasPolicy, bool) {

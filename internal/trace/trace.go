@@ -123,6 +123,7 @@ const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
 // scaled-to-zero policy; each backend Service may override both via annotations.
 func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodPercent int, gatewayZeroPolicy beaconv1alpha1.ZeroReplicasPolicy) (*GatewayResolution, error) {
 	res := &GatewayResolution{}
+	gatewayCritical := policy.GatewayCritical(gw)
 
 	// 1. Infer the VIP(s) from Gateway status, then fall back to the proxy
 	//    Service's ingress IPs.
@@ -167,6 +168,7 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 			// A Skupper backend always counts; healthy iff the link is ready.
 			res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
+				Critical: policy.ServiceCritical(svc.Annotations, gatewayCritical),
 			})
 			continue
 		}
@@ -188,8 +190,9 @@ func (r *Resolver) Resolve(ctx context.Context, gw *gwapiv1.Gateway, gatewayPodP
 			zeroPol == beaconv1alpha1.ZeroReplicasUnhealthy)
 		res.ServiceHealths = append(res.ServiceHealths, health.ServiceHealth{
 			Namespace: svc.Namespace, Name: svc.Name,
-			Counted: counted,
-			Healthy: healthy,
+			Counted:  counted,
+			Healthy:  healthy,
+			Critical: policy.ServiceCritical(svc.Annotations, gatewayCritical),
 		})
 		for j := range pods {
 			key := types.NamespacedName{Namespace: pods[j].Namespace, Name: pods[j].Name}

@@ -348,6 +348,7 @@ func (b *Builder) buildGatewayNode(
 	// both via annotations).
 	gatewayPodPercent := policy.MinHealthyPodPercent(gw, spec)
 	gatewayZeroPolicy := policy.ZeroReplicasPolicy(gw, spec)
+	gatewayCritical := policy.GatewayCritical(gw)
 	var svcHealths []health.ServiceHealth
 	routes := routesByGateway[key]
 	sort.Slice(routes, func(i, j int) bool { return routes[i].name < routes[j].name })
@@ -400,8 +401,10 @@ func (b *Builder) buildGatewayNode(
 				} else {
 					remote.Status = StatusUnhealthy
 				}
+				sn.Critical = policy.ServiceCritical(svc.Annotations, gatewayCritical)
 				svcHealths = append(svcHealths, health.ServiceHealth{
 					Namespace: svc.Namespace, Name: svc.Name, Counted: true, Healthy: sh.Ready,
+					Critical: sn.Critical,
 				})
 				sn.Pods = append(sn.Pods, remote)
 				sn.Status = worstPodStatus(sn.Pods)
@@ -457,10 +460,12 @@ func (b *Builder) buildGatewayNode(
 				}
 			}
 			sn.ScaledToZero = svcScaledToZero
+			sn.Critical = policy.ServiceCritical(svc.Annotations, gatewayCritical)
 			svcHealths = append(svcHealths, health.ServiceHealth{
 				Namespace: svc.Namespace, Name: svc.Name,
-				Counted: svcCounted,
-				Healthy: svcHealthy,
+				Counted:  svcCounted,
+				Healthy:  svcHealthy,
+				Critical: sn.Critical,
 			})
 			sn.Status = worstPodStatus(sn.Pods)
 			if svcScaledToZero {
@@ -485,6 +490,7 @@ func (b *Builder) buildGatewayNode(
 	decision := health.EvaluateGateway(svcHealths, threshold)
 	node.HealthyBackends = int32(decision.Healthy)
 	node.CountedBackends = int32(decision.Counted)
+	node.CriticalBackendDown = decision.CriticalDown
 	switch {
 	case node.Exempt || decision.Exempt:
 		node.Health = StatusExempt

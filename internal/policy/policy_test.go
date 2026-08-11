@@ -174,3 +174,36 @@ func TestServiceZeroReplicasPolicy_Precedence(t *testing.T) {
 		t.Fatalf("expected service override Unhealthy, got %q", got)
 	}
 }
+
+func TestGatewayCritical(t *testing.T) {
+	if GatewayCritical(gw("ns", "a", nil, "cls")) {
+		t.Fatal("expected false with no annotation")
+	}
+	if !GatewayCritical(gw("ns", "a", map[string]string{CriticalAnnotation: "true"}, "cls")) {
+		t.Fatal("expected true with critical=true")
+	}
+	if GatewayCritical(gw("ns", "a", map[string]string{CriticalAnnotation: "false"}, "cls")) {
+		t.Fatal("expected false with critical=false")
+	}
+}
+
+func TestServiceCritical_Precedence(t *testing.T) {
+	// no service annotation -> gateway-level default
+	if !ServiceCritical(nil, true) {
+		t.Fatal("expected gateway-level true to apply")
+	}
+	if ServiceCritical(nil, false) {
+		t.Fatal("expected gateway-level false to apply")
+	}
+	// service annotation overrides gateway default (both directions)
+	if ServiceCritical(map[string]string{CriticalAnnotation: "false"}, true) {
+		t.Fatal("expected service false to override gateway true")
+	}
+	if !ServiceCritical(map[string]string{CriticalAnnotation: "true"}, false) {
+		t.Fatal("expected service true to override gateway false")
+	}
+	// invalid annotation falls back to gateway default
+	if !ServiceCritical(map[string]string{CriticalAnnotation: "bogus"}, true) {
+		t.Fatal("expected invalid annotation to fall back to gateway true")
+	}
+}

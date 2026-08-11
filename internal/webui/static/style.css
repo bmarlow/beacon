@@ -236,6 +236,15 @@ a.name.link::after { content: " \2197"; font-size: 10px; color: var(--text-secon
 
 .since { font-size: 11px; color: var(--text-secondary); white-space: nowrap; font-family: var(--font-mono); }
 
+/* Inline tags/chips next to a node name (e.g. CRITICAL). */
+.tag {
+  font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  border-radius: 10px; padding: 1px 7px; margin-left: var(--sp-xs); white-space: nowrap;
+}
+.tag-critical {
+  background: var(--st-unhealthy); color: #fff; border: 1px solid var(--st-unhealthy);
+}
+
 /* Status left-border colors */
 .st-Healthy > .row { border-left-color: var(--st-healthy); }
 .st-Degraded > .row { border-left-color: var(--st-degraded); }

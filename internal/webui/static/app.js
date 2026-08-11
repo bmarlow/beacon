@@ -129,6 +129,14 @@
       nameEl = el("span", "name" + (opts.mono ? " pill-ip" : ""), opts.name);
     }
     row.appendChild(nameEl);
+    // Optional inline tags (e.g. a "CRITICAL" chip) rendered right after the name.
+    if (opts.tags && opts.tags.length) {
+      opts.tags.forEach((tg) => {
+        const tagEl = el("span", "tag " + (tg.cls || ""), tg.label);
+        if (tg.title) tagEl.title = tg.title;
+        row.appendChild(tagEl);
+      });
+    }
     if (opts.ns) row.appendChild(el("span", "ns", opts.ns));
     if (opts.meta) {
       const metaEl = el("span", "meta", opts.meta);
@@ -201,12 +209,23 @@
       }
       meta = (s.type || "") + podInfo;
     }
+    const tags = [];
+    if (s.critical) {
+      tags.push({
+        label: "CRITICAL",
+        cls: "tag-critical",
+        title:
+          "Critical backend: if this Service becomes unavailable, the whole " +
+          "Gateway is withdrawn regardless of the min-healthy-backend threshold.",
+      });
+    }
     return nodeRow({
       id: "svc/" + s.namespace + "/" + s.name,
       kind: s.skupper ? "Service (Skupper)" : "Service",
       name: s.name,
       ns: s.namespace,
       meta: meta,
+      tags: tags,
       status: s.status,
       statusForSeconds: s.statusForSeconds,
       ref: s.ref,
@@ -245,13 +264,25 @@
         " (min " + (g.minHealthyPercent != null ? g.minHealthyPercent : 100) + "%)"
       );
     }
+    if (g.criticalBackendDown) meta.push("\u26A0 critical backend down");
     if (g.ips && g.ips.length) meta.push(g.ips.join(", "));
+    const tags = [];
+    if (g.criticalBackendDown) {
+      tags.push({
+        label: "CRITICAL DOWN",
+        cls: "tag-critical",
+        title:
+          "A backend flagged critical is unavailable; the Gateway is withdrawn " +
+          "regardless of the min-healthy-backend threshold.",
+      });
+    }
     return nodeRow({
       id: "gw/" + g.namespace + "/" + g.name,
       kind: "Gateway",
       name: g.name,
       ns: g.namespace,
       meta: meta.join(" \u00b7 "),
+      tags: tags,
       adv: g.advertisement,
       timer: g.timer,
       status: g.status,
