@@ -71,27 +71,37 @@ spec:
     cluster-scoped and it must observe Gateways/routes/backends across all
     namespaces. Cluster permissions and why each is needed:
 
-    * `gateways`, `gateway/status`, `gatewayclasses`, `httproutes`, `grpcroutes`,
-      `tcproutes`, `tlsroutes` (read) — discover Gateways and trace their
-      attached routes/backends.
-    * `services` (read/write) — read backend Services; create/own the dashboard
-      & metrics Services.
+    Permissions follow least privilege: write verbs are granted only where the
+    operator actually mutates a resource. `list`/`watch` appear on read-only
+    resources because reads go through the controller-runtime cache, which is
+    backed by informers.
+
+    * `gateways`, `httproutes`, `grpcroutes`, `tcproutes`, `tlsroutes` (read) —
+      discover Gateways and trace their attached routes/backends. (Gateway
+      status is read in-object; `gatewayclasses` is not accessed as a resource.)
+    * `services` (read + create/update) — read backend Services; create/own the
+      dashboard & metrics Services.
     * `pods`, `endpointslices` (read) — evaluate backend workload health.
-    * `deployments` + `deployments/scale` (read/update/**delete**) — scale the
-      Gateway's proxy Deployment to withdraw/restore a VIP (the BGP-safe
-      mechanism), and the `delete` verb is required by the ownerRef admission
-      check for resources the operator garbage-collects.
+    * `deployments` (read + `patch`) — scale the Gateway's proxy Deployment to
+      withdraw/restore a VIP (the BGP-safe mechanism) via a MergeFrom patch of
+      its replicas/annotations. No `update`/`delete`, and the `scale`
+      subresource is not used.
+    * `gatewayhealthpolicies` (read) and `.../status` (`patch`) — read config;
+      write only the status subresource.
     * `ipaddresspools` (read, metallb.io) — attribute Gateway VIPs to MetalLB.
     * `listeners` (read, skupper.io) — evaluate Skupper-linked remote backends.
-    * `consoles` (read), `routes` (read/write), `consolelinks` (read/write) —
-      discover the console URL and publish/own the dashboard Route + launcher
-      link.
-    * `subjectaccessreviews`, `tokenreviews` (create) — authenticate/authorize
-      dashboard users (oauth-proxy + per-user RBAC filtering).
-    * `secrets`, `serviceaccounts` (read/write) — provision the oauth-proxy
-      cookie secret and SA OAuth redirect annotation.
-    * `servicemonitors`, `prometheusrules` (read/write, monitoring.coreos.com) —
-      wire metrics into OpenShift monitoring.
+    * `consoles` (read), `routes` (read + create/update), `consolelinks`
+      (read + create/update) — discover the console URL and publish/own the
+      dashboard Route + launcher link.
+    * `subjectaccessreviews` (create) — per-user dashboard authorization.
+    * `tokenreviews` (create) — used by the oauth-proxy sidecar (shares the
+      operator SA) to validate dashboard user tokens.
+    * `secrets` (read + create) — provision the oauth-proxy cookie Secret (never
+      updated).
+    * `serviceaccounts` (read + update) — set the operator SA's OAuth redirect
+      annotation.
+    * `servicemonitors`, `prometheusrules` (read + create/update,
+      monitoring.coreos.com) — wire metrics into OpenShift monitoring.
 
     See the project README for full details.
   keywords:
@@ -167,36 +177,41 @@ spec:
       clusterPermissions:
         - serviceAccountName: beacon-controller-manager
           rules:
+            # Config CR: read/watch only; the spec is never modified.
             - apiGroups: ["beacon.io"]
               resources: ["gatewayhealthpolicies"]
-              verbs: ["get", "list", "watch", "update"]
+              verbs: ["get", "list", "watch"]
+            # Only the status subresource is written (via Patch).
             - apiGroups: ["beacon.io"]
               resources: ["gatewayhealthpolicies/status"]
-              verbs: ["get", "update", "patch"]
+              verbs: ["patch"]
+            # Gateways + attached routes: read/watch. Status is read in-object,
+            # so no separate gateways/status verb is needed.
             - apiGroups: ["gateway.networking.k8s.io"]
-              resources: ["gateways", "gatewayclasses", "httproutes", "grpcroutes", "tcproutes", "tlsroutes"]
+              resources: ["gateways", "httproutes", "grpcroutes", "tcproutes", "tlsroutes"]
               verbs: ["get", "list", "watch"]
-            - apiGroups: ["gateway.networking.k8s.io"]
-              resources: ["gateways/status"]
-              verbs: ["get"]
+            # Services: read/watch backends; create+update the operator-owned
+            # metrics and dashboard Services (never patch/delete).
             - apiGroups: [""]
               resources: ["services"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              verbs: ["get", "list", "watch", "create", "update"]
             - apiGroups: [""]
               resources: ["pods"]
               verbs: ["get", "list", "watch"]
             - apiGroups: ["discovery.k8s.io"]
               resources: ["endpointslices"]
               verbs: ["get", "list", "watch"]
+            # Deployments: read/watch all; the only write is a MergeFrom patch of
+            # the proxy Deployment's replicas/annotations (withdraw/advertise).
+            # No update/delete, and the scale subresource is not used.
             - apiGroups: ["apps"]
               resources: ["deployments"]
-              verbs: ["get", "list", "watch", "update", "patch", "delete"]
-            - apiGroups: ["apps"]
-              resources: ["deployments/scale"]
-              verbs: ["get", "update", "patch"]
+              verbs: ["get", "list", "watch", "patch"]
             - apiGroups: [""]
               resources: ["events"]
               verbs: ["create", "patch"]
+            # IPAddressPools, Skupper Listeners, OpenShift console: read-only.
+            # list/watch are required because reads go through the cache.
             - apiGroups: ["metallb.io"]
               resources: ["ipaddresspools"]
               verbs: ["get", "list", "watch"]
@@ -206,27 +221,36 @@ spec:
             - apiGroups: ["config.openshift.io"]
               resources: ["consoles"]
               verbs: ["get", "list", "watch"]
+            # Dashboard Route/ConsoleLink and monitoring CRs: read/watch (cache)
+            # + create/update used to provision them. No patch/delete.
             - apiGroups: ["route.openshift.io"]
               resources: ["routes"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              verbs: ["get", "list", "watch", "create", "update"]
             - apiGroups: ["console.openshift.io"]
               resources: ["consolelinks"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              verbs: ["get", "list", "watch", "create", "update"]
             - apiGroups: ["monitoring.coreos.com"]
               resources: ["servicemonitors", "prometheusrules"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              verbs: ["get", "list", "watch", "create", "update"]
+            # Per-user dashboard authorization checks.
             - apiGroups: ["authorization.k8s.io"]
               resources: ["subjectaccessreviews"]
               verbs: ["create"]
+            # Used by the oauth-proxy sidecar (shares the operator SA) to
+            # validate dashboard user tokens.
             - apiGroups: ["authentication.k8s.io"]
               resources: ["tokenreviews"]
               verbs: ["create"]
+            # Secrets: get + create the dashboard oauth cookie Secret only (never
+            # updated). list/watch required for the cache-backed Get.
             - apiGroups: [""]
               resources: ["secrets"]
-              verbs: ["get", "list", "watch", "create", "update", "patch"]
+              verbs: ["get", "list", "watch", "create"]
+            # ServiceAccounts: get + update the operator SA's OAuth redirect
+            # annotation. list/watch required for the cache-backed Get.
             - apiGroups: [""]
               resources: ["serviceaccounts"]
-              verbs: ["get", "list", "watch", "update", "patch"]
+              verbs: ["get", "list", "watch", "update"]
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:

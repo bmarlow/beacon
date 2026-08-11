@@ -85,28 +85,47 @@ type gwState struct {
 	timer          *state.TimerStatus
 }
 
+// Gateways: read + watch (For()). Status is read in-object; no separate verb.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status,verbs=get
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
+// Routes attached to Gateways: read + watch to react to attachment changes.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes;tcproutes;tlsroutes,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch
+// Services: read/watch backends; create+update the operator-owned metrics and
+// dashboard Services (never patch/delete).
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch;delete
-// +kubebuilder:rbac:groups=apps,resources=deployments/scale,verbs=get;update;patch
+// Deployments: read/watch all; the only write is a MergeFrom patch of the proxy
+// Deployment's replicas/annotations (withdraw/advertise). No update/delete, and
+// the scale subresource is not used.
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+// IPAddressPools: read-only; list/watch are required because reads go through
+// the controller-runtime cache (informer-backed).
 // +kubebuilder:rbac:groups=metallb.io,resources=ipaddresspools,verbs=get;list;watch
+// Skupper Listeners & OpenShift console: read-only (cache-backed reads need
+// list/watch even though only Get is called).
 // +kubebuilder:rbac:groups=skupper.io,resources=listeners,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
-// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;prometheusrules,verbs=get;list;watch;create;update;patch
+// Dashboard Route/ConsoleLink and monitoring CRs: read/watch (cache) + the
+// create/update used to provision them. No patch/delete.
+// +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=console.openshift.io,resources=consolelinks,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=servicemonitors;prometheusrules,verbs=get;list;watch;create;update
+// SubjectAccessReviews: per-user dashboard authorization checks.
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// TokenReviews: used by the oauth-proxy sidecar (shares the operator SA) to
+// validate dashboard user tokens.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies,verbs=get;list;watch;update
-// +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies/status,verbs=get;update;patch
+// Secrets: get + create the dashboard oauth cookie Secret only (never updated).
+// list/watch required for the cache-backed Get.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
+// ServiceAccounts: get + update the operator SA's OAuth redirect annotation.
+// list/watch required for the cache-backed Get.
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update
+// GatewayHealthPolicy: read/watch config; only the status subresource is written
+// (via Patch). The spec is never modified.
+// +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies/status,verbs=patch
 
 // Reconcile implements the control loop for a single Gateway.
 func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
