@@ -1,13 +1,13 @@
 apiVersion: operators.coreos.com/v1alpha1
 kind: ClusterServiceVersion
 metadata:
-  name: beacon.v0.1.17
+  name: beacon.v0.1.18
   namespace: placeholder
   annotations:
     capabilities: Seamless Upgrades
     categories: Networking
-    containerImage: ghcr.io/bmarlow/beacon@sha256:bc57f7c21a00ec81dc09c9c92e8d148f2684779498d8eaa784d8fcb224211f3b
-    createdAt: "2026-08-11T00:00:00Z"
+    containerImage: ghcr.io/bmarlow/beacon@sha256:41498a1ac67e8f84951b7dafeec6ac48c1e5dde5295a502cecc537f1412ed044
+    createdAt: "2026-08-11T22:00:00Z"
     description: >-
       Beacon integrates Gateway API Gateway health with MetalLB BGP
       advertisements, withdrawing and restoring individual load-balancer routes
@@ -111,8 +111,8 @@ spec:
     - networking
     - health
     - load-balancer
-  version: 0.1.17
-  replaces: beacon.v0.1.16
+  version: 0.1.18
+  replaces: beacon.v0.1.17
   maturity: alpha
   minKubeVersion: 1.27.0
   provider:
@@ -309,7 +309,7 @@ spec:
                       optional: true
                 containers:
                   - name: manager
-                    image: ghcr.io/bmarlow/beacon@sha256:bc57f7c21a00ec81dc09c9c92e8d148f2684779498d8eaa784d8fcb224211f3b
+                    image: ghcr.io/bmarlow/beacon@sha256:41498a1ac67e8f84951b7dafeec6ac48c1e5dde5295a502cecc537f1412ed044
                     command: ["/manager"]
                     args:
                       - --leader-elect
