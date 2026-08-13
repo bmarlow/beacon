@@ -37,6 +37,7 @@ import (
 
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/controller"
+	"github.com/bmarlow/beacon/internal/export"
 	"github.com/bmarlow/beacon/internal/metallb"
 	"github.com/bmarlow/beacon/internal/metrics"
 	"github.com/bmarlow/beacon/internal/monitoring"
@@ -66,6 +67,8 @@ func main() {
 	var policyName string
 	var dashboardAddr string
 	var dashboardAuthRequired bool
+	var exportAddr string
+	var exportCertDir string
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.StringVar(&metricsCertDir, "metrics-cert-dir", "",
 		"Directory containing tls.crt/tls.key for the metrics server (e.g. an "+
@@ -84,6 +87,14 @@ func main() {
 		"Require authentication (via an OpenShift oauth-proxy front-end) and enforce "+
 			"per-user RBAC on the dashboard. When true, the dashboard only serves the "+
 			"forwarded-user's identity and filters resources by SubjectAccessReview.")
+	flag.StringVar(&exportAddr, "export-bind-address", "",
+		"The address the multi-cluster summary export endpoint (GET /api/v1/export/summary) "+
+			"binds to, e.g. \":8083\". Empty (default) disables it. Intended for a hub cluster "+
+			"to poll cheap, cluster-level status; see internal/export.")
+	flag.StringVar(&exportCertDir, "export-cert-dir", "",
+		"Directory containing tls.crt/tls.key for the export endpoint (e.g. an OpenShift "+
+			"service-serving cert mount). When empty, an ephemeral self-signed certificate is "+
+			"generated at startup.")
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -159,6 +170,21 @@ func main() {
 		rm := webui.NewResourceManager(mgr.GetClient(), port, dashboardAuthRequired, oauthProxyPort)
 		if err := rm.AddToManager(mgr); err != nil {
 			setupLog.Error(err, "unable to register dashboard resource manager")
+			os.Exit(1)
+		}
+	}
+
+	// Multi-cluster summary export endpoint (opt-in; disabled unless
+	// --export-bind-address is set). Runs on every replica (read-only).
+	if exportAddr != "" {
+		exp := &export.Server{
+			Addr:       exportAddr,
+			Client:     mgr.GetClient(),
+			PolicyName: policyName,
+			CertDir:    exportCertDir,
+		}
+		if err := exp.AddToManager(mgr); err != nil {
+			setupLog.Error(err, "unable to register multi-cluster export endpoint")
 			os.Exit(1)
 		}
 	}

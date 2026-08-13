@@ -858,6 +858,74 @@ also used to label every Prometheus metric Beacon exports — see
 every cluster managed by RHACM) and later adding a hub that aggregates their status;
 single-cluster installs can ignore it.
 
+#### Multi-cluster summary export endpoint
+
+For a hub to poll many clusters cheaply, Beacon can optionally serve a small, versioned,
+machine-oriented endpoint separate from the human dashboard:
+
+```
+GET /api/v1/export/summary
+```
+
+It returns a `Summary` — a thin wrapper around `GatewayHealthPolicy.status` (cluster identity,
+aggregate counts, and a per-Gateway health/advertisement rollup) — deliberately **not** the full
+pod/route/service topology, so it stays cheap to poll frequently from many clusters at once. A
+hub wanting full detail for a specific cluster should fetch (or deep-link to) that cluster's own
+dashboard instead.
+
+```json
+{
+  "schemaVersion": "v1",
+  "generatedAt": "2026-08-13T12:00:00Z",
+  "operatorVersion": "v0.1.20",
+  "cluster": { "id": "3fa1e2b0-...", "name": "prod-east", "source": "OpenShiftClusterVersion" },
+  "managedGateways": 3,
+  "advertisedIPs": 2,
+  "withdrawnIPs": 1,
+  "gateways": [
+    { "namespace": "app", "name": "gw-a", "ips": ["10.0.0.1"], "fromMetalLB": true,
+      "health": "Healthy", "advertisement": "Advertised" }
+  ]
+}
+```
+
+**Disabled by default.** Enable it with `--export-bind-address=:8083` (see [Manager
+flags](#manager-flags)). It is intentionally **not** fronted by the oauth-proxy sidecar the
+dashboard uses — that flow is for interactive human logins, not a hub's ServiceAccount. Instead:
+
+- The caller presents a bearer token (`Authorization: Bearer <token>`) — typically a hub
+  ServiceAccount's projected token.
+- Beacon authenticates it via `TokenReview` and authorizes it via a `SubjectAccessReview`
+  against the request's non-resource URL and verb — the same trust boundary as any other
+  RBAC-governed request, evaluated by the kube-apiserver itself. This requires **no new RBAC on
+  Beacon's own ServiceAccount** (it already has `create` on `tokenreviews`/
+  `subjectaccessreviews` for the dashboard's per-user checks).
+- The **caller** needs its own `ClusterRole` granting it this path, e.g. on the spoke cluster
+  for the hub's ServiceAccount (imported via RHACM, a `ManagedServiceAccount`, or any bearer
+  token valid on that cluster):
+
+  ```yaml
+  apiVersion: rbac.authorization.k8s.io/v1
+  kind: ClusterRole
+  metadata:
+    name: beacon-export-reader
+  rules:
+    - nonResourceURLs: ["/api/v1/export/summary"]
+      verbs: ["get"]
+  ```
+
+- TLS is mandatory (bearer tokens must never be sent in the clear). Set `--export-cert-dir` to a
+  mounted certificate (e.g. an OpenShift service-serving cert, as used for the metrics
+  endpoint) for a cluster-verifiable certificate; otherwise Beacon generates an ephemeral
+  self-signed certificate at startup (fine behind an OpenShift Route with edge/reencrypt
+  termination).
+
+**Current limitations** (this is a first iteration): Beacon does not yet provision a
+Service/Route for this port automatically the way it does for the dashboard — expose it
+yourself (a `ClusterIP`/`LoadBalancer` Service, or an OpenShift `Route`) to reach it from
+outside the pod network. There is also no hub component yet; this endpoint is the piece a
+future hub would poll.
+
 ### Annotations
 
 Placed on a **Gateway** unless noted. Annotations marked *(Gateway or Service)*
@@ -881,6 +949,8 @@ Gateway-level default for that Service (precedence: Service > Gateway > policy).
 | `--policy-name`               | `cluster`          | Name of the singleton `GatewayHealthPolicy` to load config from.  |
 | `--dashboard-bind-address`    | `:8082`            | Address the dashboard binds to (set empty to disable the UI).     |
 | `--dashboard-auth-required`   | `true`             | Require OpenShift OAuth + per-user RBAC filtering for the dashboard. |
+| `--export-bind-address`       | `""` (disabled)    | Address the [multi-cluster summary export endpoint](#multi-cluster-summary-export-endpoint) binds to, e.g. `:8083`. |
+| `--export-cert-dir`           | `""`               | TLS cert dir for the export endpoint; self-signed when empty.      |
 | `--leader-elect`              | `false`†           | Enable leader election (the shipped deployment sets this true).    |
 | `--metrics-bind-address`      | `:8443`            | Metrics endpoint (HTTPS; HTTP/2 disabled).                        |
 | `--health-probe-bind-address` | `:8081`            | Health/readiness probe endpoint.                                  |
