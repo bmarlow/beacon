@@ -429,6 +429,15 @@ Pull requests build the image (to catch breakage) but do not push. For
 reproducible deployments, pin the `sha-<short>` tag in your kustomize overlay
 rather than `latest`.
 
+The binary's self-reported version (shown in the dashboard header and
+`status.cluster`/`/api/topology`'s `operatorVersion`) is baked in at build time via
+`-ldflags -X internal/version.Version=...`. A plain push to `main` bakes in
+`sha-<short>` (no release number is known yet at that point); pushing a `vX.Y.Z` git
+tag, or manually dispatching the workflow with a `version` input
+(`gh workflow run build-image.yaml -f version=X.Y.Z`), bakes in the real version
+number `X.Y.Z` instead. Release builds (the ones referenced by the CSV/bundle) use one
+of the latter two so the deployed operator reports a proper version.
+
 > The ghcr.io package must be **public** for the cluster to pull it anonymously
 > (Repository → Packages → beacon → Package settings → Change visibility), or
 > configure an image pull secret referencing a token with `read:packages`.

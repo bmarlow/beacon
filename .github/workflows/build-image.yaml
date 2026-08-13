@@ -12,7 +12,15 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version string to bake into the binary (e.g. "0.1.20"), shown in the
+          dashboard/status. Overrides the default git-tag/short-SHA detection.
+          Use this for a release build without needing to push a git tag.
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
@@ -57,11 +65,15 @@ jobs:
             # semver tags (vX.Y.Z -> X.Y.Z) when a git tag is pushed
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            # explicit tag when a version is supplied via workflow_dispatch
+            type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event.inputs.version != '' }}
 
       - name: Compute version string
         id: ver
         run: |
-          if [ "${{ github.ref_type }}" = "tag" ]; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
             echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
             echo "value=sha-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
