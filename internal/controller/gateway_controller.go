@@ -46,6 +46,7 @@ import (
 	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/state"
 	"github.com/bmarlow/beacon/internal/trace"
+	"github.com/bmarlow/beacon/internal/version"
 )
 
 // GatewayReconciler reconciles Gateway API Gateways against MetalLB
@@ -149,6 +150,13 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	spec := &pol.Spec
 	resync := durationOr(spec.ResyncInterval.Duration, 10*time.Second)
 
+	// Resolve cluster identity once per reconcile (cheap cache-backed reads;
+	// see internal/identity). Used to label metrics and to populate
+	// status.cluster, so a multi-cluster hub can attribute this Gateway's data
+	// to the right cluster.
+	clusterIdentity := identity.Resolve(ctx, r.Client, spec.ClusterName)
+	clusterLabel := identity.Label(clusterIdentity)
+
 	// Fetch the Gateway.
 	gw := &gwapiv1.Gateway{}
 	if err := r.Get(ctx, req.NamespacedName, gw); err != nil {
@@ -222,13 +230,13 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Run dampening state machine and act.
 	adv := &advertiser.Advertiser{Client: r.Client, Config: spec.MetalLB}
 
-	requeue, advState, timer, err := r.reconcileAdvertisement(ctx, gw, spec, current, resolution, adv, resync)
+	requeue, advState, timer, err := r.reconcileAdvertisement(ctx, gw, spec, current, resolution, adv, resync, clusterLabel)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
 	r.recordGatewayStatusWithIP(req.NamespacedName, current, advState, timer, resolution.IPs, fromMetalLB)
-	if err := r.updatePolicyStatus(ctx, pol); err != nil {
+	if err := r.updatePolicyStatus(ctx, pol, clusterIdentity); err != nil {
 		logger.V(1).Info("failed updating policy status", "error", err.Error())
 	}
 
@@ -245,6 +253,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 	resolution *trace.GatewayResolution,
 	adv *advertiser.Advertiser,
 	resync time.Duration,
+	clusterLabel string,
 ) (time.Duration, beaconv1alpha1.AdvertisementState, *state.TimerStatus, error) {
 	key := types.NamespacedName{Namespace: gw.Namespace, Name: gw.Name}
 	now := time.Now()
@@ -299,7 +308,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 		if healthySince != nil && now.Sub(*healthySince) >= readvertiseAfter {
 			r.event(gw, corev1.EventTypeNormal, "Readvertised",
 				fmt.Sprintf("workload healthy for %s (recovery); restoring MetalLB advertisement for %v", readvertiseAfter, resolution.IPs))
-			metrics.ReadvertisementsTotal.WithLabelValues(gw.Namespace, gw.Name).Inc()
+			metrics.ReadvertisementsTotal.WithLabelValues(clusterLabel, gw.Namespace, gw.Name).Inc()
 			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementAdvertised, true, resync)
 			return d, s, nil, err
 		}
@@ -324,7 +333,7 @@ func (r *GatewayReconciler) reconcileAdvertisement(
 		if unhealthySince != nil && now.Sub(*unhealthySince) >= withdrawAfter {
 			r.event(gw, corev1.EventTypeWarning, "Withdrawn",
 				fmt.Sprintf("workload unhealthy for %s (backoff); withdrawing MetalLB advertisement for %v", withdrawAfter, resolution.IPs))
-			metrics.WithdrawalsTotal.WithLabelValues(gw.Namespace, gw.Name).Inc()
+			metrics.WithdrawalsTotal.WithLabelValues(clusterLabel, gw.Namespace, gw.Name).Inc()
 			d, s, err := r.transition(ctx, key, adv, resolution, beaconv1alpha1.AdvertisementWithdrawn, false, resync)
 			return d, s, nil, err
 		}
@@ -575,7 +584,8 @@ func (r *GatewayReconciler) recordGatewayStatusWithIP(key types.NamespacedName, 
 
 // updatePolicyStatus recomputes aggregate counters and writes them to the
 // policy's status subresource.
-func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv1alpha1.GatewayHealthPolicy) error {
+func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv1alpha1.GatewayHealthPolicy, clusterIdentity beaconv1alpha1.ClusterIdentity) error {
+	clusterLabel := identity.Label(clusterIdentity)
 	r.mu.Lock()
 	var managed, advertised, withdrawn int32
 	gateways := make([]beaconv1alpha1.GatewayStatus, 0, len(r.state))
@@ -610,20 +620,21 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 		if st.health != beaconv1alpha1.HealthUnhealthy {
 			healthy = 1.0
 		}
-		metrics.GatewayHealthy.WithLabelValues(key.Namespace, key.Name).Set(healthy)
+		metrics.GatewayHealthy.WithLabelValues(clusterLabel, key.Namespace, key.Name).Set(healthy)
 		adv := 1.0
 		switch st.advertisement {
 		case beaconv1alpha1.AdvertisementWithdrawn, beaconv1alpha1.AdvertisementPendingReadvertise:
 			adv = 0.0
 		}
-		metrics.GatewayAdvertised.WithLabelValues(key.Namespace, key.Name).Set(adv)
+		metrics.GatewayAdvertised.WithLabelValues(clusterLabel, key.Namespace, key.Name).Set(adv)
 	}
 	r.mu.Unlock()
 
 	// Aggregate metric gauges.
-	metrics.ManagedGateways.Set(float64(managed))
-	metrics.AdvertisedIPs.Set(float64(advertised))
-	metrics.WithdrawnIPs.Set(float64(withdrawn))
+	metrics.ManagedGateways.WithLabelValues(clusterLabel).Set(float64(managed))
+	metrics.AdvertisedIPs.WithLabelValues(clusterLabel).Set(float64(advertised))
+	metrics.WithdrawnIPs.WithLabelValues(clusterLabel).Set(float64(withdrawn))
+	metrics.SetClusterInfo(clusterLabel, clusterIdentity.ID, clusterIdentity.Name, string(clusterIdentity.Source), version.Get())
 
 	sort.Slice(gateways, func(i, j int) bool {
 		if gateways[i].Namespace != gateways[j].Namespace {
@@ -638,7 +649,7 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 	pol.Status.AdvertisedIPs = advertised
 	pol.Status.WithdrawnIPs = withdrawn
 	pol.Status.Gateways = gateways
-	pol.Status.Cluster = identity.Resolve(ctx, r.Client, pol.Spec.ClusterName)
+	pol.Status.Cluster = clusterIdentity
 	meta := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,

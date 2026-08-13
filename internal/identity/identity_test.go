@@ -144,3 +144,22 @@ func TestResolve_ManualWithNameOverrideOnly(t *testing.T) {
 		t.Fatalf("expected override name, got %q", got.Name)
 	}
 }
+
+func TestLabel(t *testing.T) {
+	tests := []struct {
+		name string
+		ci   beaconv1alpha1.ClusterIdentity
+		want string
+	}{
+		{name: "name wins over id", ci: beaconv1alpha1.ClusterIdentity{ID: "abc", Name: "prod-east"}, want: "prod-east"},
+		{name: "falls back to id", ci: beaconv1alpha1.ClusterIdentity{ID: "abc"}, want: "abc"},
+		{name: "empty when neither set", ci: beaconv1alpha1.ClusterIdentity{}, want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := Label(tc.ci); got != tc.want {
+				t.Fatalf("Label(%+v) = %q, want %q", tc.ci, got, tc.want)
+			}
+		})
+	}
+}

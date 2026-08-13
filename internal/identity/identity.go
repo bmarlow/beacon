@@ -97,6 +97,17 @@ func infrastructureName(ctx context.Context, c client.Client) (string, bool) {
 	return name, found && name != ""
 }
 
+// Label returns a single best-effort display value for a ClusterIdentity,
+// suitable for use as a metric label or log field: Name if set, else ID, else
+// "" (nothing could be determined). Prefer this over reading Name/ID directly
+// so all call sites apply the same fallback consistently.
+func Label(ci beaconv1alpha1.ClusterIdentity) string {
+	if ci.Name != "" {
+		return ci.Name
+	}
+	return ci.ID
+}
+
 // kubeSystemUID reads the kube-system Namespace UID.
 func kubeSystemUID(ctx context.Context, c client.Client) (string, bool) {
 	ns := &corev1.Namespace{}

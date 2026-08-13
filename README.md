@@ -769,16 +769,28 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
   disabled to mitigate Rapid Reset CVE-2023-44487 / CVE-2023-39325). Beacon
   exposes domain metrics in addition to the controller-runtime defaults:
 
+  Every metric below carries a `cluster` label (see [Cluster identity and
+  multi-cluster fleets](#cluster-identity-and-multi-cluster-fleets)) — the
+  cluster's effective name, or its stable ID when no name is known. A single
+  Beacon instance only ever populates one `cluster` value, so this adds no
+  extra series for a single-cluster install; it exists so metrics from many
+  clusters can be safely aggregated (e.g. via classic Prometheus federation, or
+  fed into a hub's Thanos/Observability stack) without series from different
+  clusters colliding, and so binary expressions between two Beacon metrics
+  (e.g. `withdrawn_ips / managed_gateways` in the shipped `PrometheusRule`)
+  keep matching per-cluster once federated.
+
   | Metric | Type | Description |
   | ------ | ---- | ----------- |
-  | `beacon_managed_gateways` | gauge | Gateways currently managed. |
-  | `beacon_advertised_ips` | gauge | VIPs currently advertised. |
-  | `beacon_withdrawn_ips` | gauge | VIPs currently withdrawn. |
-  | `beacon_gateway_healthy{gateway_namespace,gateway_name}` | gauge | Per-Gateway health (1/0). |
-  | `beacon_gateway_advertised{gateway_namespace,gateway_name}` | gauge | Per-Gateway advertisement (1/0). |
-  | `beacon_withdrawals_total{…}` | counter | Route withdrawals performed. |
-  | `beacon_readvertisements_total{…}` | counter | Route re-advertisements performed. |
-  | `beacon_reconcile_errors_total` | counter | Reconcile errors. |
+  | `beacon_info{cluster,cluster_id,cluster_name,cluster_source,version}` | gauge | Always 1; cluster identity + operator version, for fleet inventory and joins. |
+  | `beacon_managed_gateways{cluster}` | gauge | Gateways currently managed. |
+  | `beacon_advertised_ips{cluster}` | gauge | VIPs currently advertised. |
+  | `beacon_withdrawn_ips{cluster}` | gauge | VIPs currently withdrawn. |
+  | `beacon_gateway_healthy{cluster,gateway_namespace,gateway_name}` | gauge | Per-Gateway health (1/0). |
+  | `beacon_gateway_advertised{cluster,gateway_namespace,gateway_name}` | gauge | Per-Gateway advertisement (1/0). |
+  | `beacon_withdrawals_total{cluster,…}` | counter | Route withdrawals performed. |
+  | `beacon_readvertisements_total{cluster,…}` | counter | Route re-advertisements performed. |
+  | `beacon_reconcile_errors_total{cluster}` | counter | Reconcile errors. |
 
 - **OpenShift monitoring**: the operator provisions a metrics `Service` (with a
   service-serving cert), a `ServiceMonitor`, and a `PrometheusRule` at startup,
@@ -840,9 +852,11 @@ status:
   `Manual`), so a consumer can gauge confidence in cross-cluster correlation.
 
 This same identity, plus a `schemaVersion` field, is included in the dashboard's exported
-topology JSON (`/api/topology`) — see [Topology dashboard](#topology-dashboard-web-ui). This
-is groundwork for running Beacon on many clusters (e.g. every cluster managed by RHACM) and
-later adding a hub that aggregates their status; single-cluster installs can ignore it.
+topology JSON (`/api/topology`) — see [Topology dashboard](#topology-dashboard-web-ui). It is
+also used to label every Prometheus metric Beacon exports — see
+[Observability](#observability). This is groundwork for running Beacon on many clusters (e.g.
+every cluster managed by RHACM) and later adding a hub that aggregates their status;
+single-cluster installs can ignore it.
 
 ### Annotations
 
