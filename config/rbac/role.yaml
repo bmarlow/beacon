@@ -14,6 +14,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - namespaces
   - pods
   verbs:
   - get
@@ -85,7 +86,9 @@ rules:
 - apiGroups:
   - config.openshift.io
   resources:
+  - clusterversions
   - consoles
+  - infrastructures
   verbs:
   - get
   - list

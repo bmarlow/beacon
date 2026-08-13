@@ -66,6 +66,15 @@ spec:
               advertisements. Global timers, MetalLB integration settings, and exemptions
               are all defined here. Per-Gateway annotations may override selected fields.
             properties:
+              clusterName:
+                description: |-
+                  ClusterName optionally overrides the human-readable cluster name Beacon
+                  reports about itself in status.cluster.name. Intended for multi-cluster
+                  fleets where a hub cluster aggregates status from many Beacon instances
+                  (e.g. one running on each cluster managed by Red Hat Advanced Cluster
+                  Management). When unset, Beacon derives a name from the OpenShift
+                  Infrastructure resource (status.infrastructureName) if available.
+                type: string
               exemptions:
                 description: |-
                   Exemptions lists Gateways that should be excluded from health checking.
@@ -204,6 +213,30 @@ spec:
                   MetalLB by Beacon.
                 format: int32
                 type: integer
+              cluster:
+                description: |-
+                  Cluster identifies the cluster this Beacon instance is running on. See
+                  ClusterIdentity for details; primarily useful for multi-cluster fleets
+                  aggregating status from many Beacon instances.
+                properties:
+                  id:
+                    description: |-
+                      ID is a stable, unique cluster identifier suitable for cross-cluster
+                      correlation. See ClusterIdentitySource for how it was determined.
+                    type: string
+                  name:
+                    description: |-
+                      Name is the effective human-readable cluster name: spec.clusterName if
+                      set, else the OpenShift Infrastructure infrastructureName, else empty.
+                    type: string
+                  source:
+                    description: Source records how ID was determined.
+                    enum:
+                    - OpenShiftClusterVersion
+                    - KubeSystemUID
+                    - Manual
+                    type: string
+                type: object
               conditions:
                 description: |-
                   Conditions represent the latest available observations of the policy's

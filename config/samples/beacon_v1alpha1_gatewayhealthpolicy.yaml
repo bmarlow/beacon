@@ -58,3 +58,11 @@ spec:
   exemptions:
     - namespace: infra
       name: management-gateway
+
+  # Optional: override the human-readable cluster name Beacon reports in
+  # status.cluster.name. Groundwork for multi-cluster fleets (e.g. running
+  # Beacon on every cluster managed by Red Hat Advanced Cluster Management);
+  # unset by default. Beacon auto-detects a stable status.cluster.id
+  # regardless (OpenShift ClusterVersion UUID, or the kube-system Namespace
+  # UID as a fallback) — no configuration needed for that part.
+  # clusterName: prod-east

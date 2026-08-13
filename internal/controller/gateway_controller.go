@@ -41,6 +41,7 @@ import (
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 	"github.com/bmarlow/beacon/internal/advertiser"
 	"github.com/bmarlow/beacon/internal/health"
+	"github.com/bmarlow/beacon/internal/identity"
 	"github.com/bmarlow/beacon/internal/metrics"
 	"github.com/bmarlow/beacon/internal/policy"
 	"github.com/bmarlow/beacon/internal/state"
@@ -106,6 +107,10 @@ type gwState struct {
 // list/watch even though only Get is called).
 // +kubebuilder:rbac:groups=skupper.io,resources=listeners,verbs=get;list;watch
 // +kubebuilder:rbac:groups=config.openshift.io,resources=consoles,verbs=get;list;watch
+// Cluster identity (status.cluster): read-only, groundwork for multi-cluster
+// fleets correlating Beacon status with Red Hat Advanced Cluster Management.
+// +kubebuilder:rbac:groups=config.openshift.io,resources=clusterversions;infrastructures,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 // Dashboard Route/ConsoleLink and monitoring CRs: read/watch (cache) + the
 // create/update used to provision them. No patch/delete.
 // +kubebuilder:rbac:groups=route.openshift.io,resources=routes,verbs=get;list;watch;create;update
@@ -633,6 +638,7 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 	pol.Status.AdvertisedIPs = advertised
 	pol.Status.WithdrawnIPs = withdrawn
 	pol.Status.Gateways = gateways
+	pol.Status.Cluster = identity.Resolve(ctx, r.Client, pol.Spec.ClusterName)
 	meta := metav1.Condition{
 		Type:               "Ready",
 		Status:             metav1.ConditionTrue,

@@ -51,13 +51,40 @@ const (
 	StatusUnknown Status = "Unknown"
 )
 
+// SchemaVersion is the version of this exported Graph JSON contract. Bump it
+// only for breaking changes (renamed/removed fields); prefer additive changes.
+// External consumers — notably a multi-cluster hub aggregating topology from
+// many Beacon instances — should check this before assuming a field shape.
+const SchemaVersion = "v1"
+
+// ClusterInfo identifies the cluster a Graph was generated on. Populated from
+// the GatewayHealthPolicy status (see api/v1alpha1.ClusterIdentity), which is
+// groundwork for multi-cluster fleets aggregating topology from many Beacon
+// instances (e.g. a hub cluster running Red Hat Advanced Cluster Management).
+type ClusterInfo struct {
+	// ID is a stable, unique cluster identifier suitable for cross-cluster
+	// correlation. Empty when it could not be auto-detected.
+	ID string `json:"id,omitempty"`
+	// Name is the human-readable cluster name.
+	Name string `json:"name,omitempty"`
+	// Source records how ID was determined: "OpenShiftClusterVersion",
+	// "KubeSystemUID", or "Manual".
+	Source string `json:"source,omitempty"`
+}
+
 // Graph is the top-level payload returned to the UI.
 type Graph struct {
+	// SchemaVersion is the version of this JSON contract; see SchemaVersion.
+	SchemaVersion string `json:"schemaVersion"`
+
 	// GeneratedAt is when this snapshot was assembled.
 	GeneratedAt time.Time `json:"generatedAt"`
 
 	// OperatorVersion is the Beacon operator build version (git describe / tag).
 	OperatorVersion string `json:"operatorVersion"`
+
+	// Cluster identifies the cluster this graph was generated on.
+	Cluster ClusterInfo `json:"cluster"`
 
 	// ConsoleBaseURL is the OpenShift web console base URL (e.g.
 	// https://console-openshift-console.apps.example.com), used by the UI to

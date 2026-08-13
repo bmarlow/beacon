@@ -730,6 +730,11 @@ The manager serves the dashboard on `--dashboard-bind-address` (default
 | `/healthz`        | Dashboard liveness.                           |
 | `/oauth/sign_out` | Log out (provided by the oauth-proxy sidecar).|
 
+The `/api/topology` payload includes a `schemaVersion` (currently `"v1"`) and a `cluster`
+block (see [Cluster identity and multi-cluster fleets](#cluster-identity-and-multi-cluster-fleets)).
+`/api/topology` still uses the human dashboard's per-user oauth-proxy authentication; it is
+not (yet) a machine-to-machine export endpoint for a multi-cluster hub.
+
 ### How status is derived
 
 The dashboard reads live cluster objects (pools, gateways, routes, services,
@@ -809,6 +814,35 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
 | `gatewayClassNames`                | []string   | `[]` (all)             | Restrict management to these Gateway classes.                              |
 | `exemptions`                       | []ref      | `[]`                   | Gateways (namespace/name) to exclude.                                       |
 | `metallb.namespace`                | string     | `metallb-system`       | Namespace whose `IPAddressPool`s are read to attribute Gateway VIPs to MetalLB. |
+| `clusterName`                      | string     | `""`                   | Overrides the human-readable cluster name Beacon reports in `status.cluster.name`. Groundwork for multi-cluster fleets (see below); unset by default, since a single-cluster install has no need for it. |
+
+### Cluster identity and multi-cluster fleets
+
+Every `GatewayHealthPolicy` reports `status.cluster`, a self-identification block:
+
+```yaml
+status:
+  cluster:
+    id: 3fa1e2b0-...       # stable, auto-detected
+    name: prod-east        # spec.clusterName, or auto-detected
+    source: OpenShiftClusterVersion
+```
+
+- `id` is a stable identifier chosen automatically: the OpenShift `ClusterVersion` UUID
+  (`config.openshift.io`) when running on OpenShift, else the `kube-system` Namespace UID
+  (works on any Kubernetes cluster). These are the same identifiers Red Hat Advanced
+  Cluster Management (RHACM) surfaces as the `id.openshift.io` / `id.k8s.io`
+  `ClusterClaim`s, so a hub running RHACM can correlate a Beacon report with its own
+  `ManagedCluster` view **without any extra mapping configuration**.
+- `name` is `spec.clusterName` if set, else the OpenShift `Infrastructure`
+  `infrastructureName`, else empty.
+- `source` records how `id` was determined (`OpenShiftClusterVersion` | `KubeSystemUID` |
+  `Manual`), so a consumer can gauge confidence in cross-cluster correlation.
+
+This same identity, plus a `schemaVersion` field, is included in the dashboard's exported
+topology JSON (`/api/topology`) — see [Topology dashboard](#topology-dashboard-web-ui). This
+is groundwork for running Beacon on many clusters (e.g. every cluster managed by RHACM) and
+later adding a hub that aggregates their status; single-cluster installs can ignore it.
 
 ### Annotations
 

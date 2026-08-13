@@ -222,6 +222,37 @@ func TestBuild_WithdrawnReflectsInStatus(t *testing.T) {
 	}
 }
 
+// TestBuild_ClusterIdentityFromPolicyStatus verifies the Graph's SchemaVersion
+// is set and Cluster identity is copied from the shared GatewayHealthPolicy
+// status (computed once by the reconciling leader), not re-resolved by the
+// dashboard/topology builder itself.
+func TestBuild_ClusterIdentityFromPolicyStatus(t *testing.T) {
+	s := scheme(t)
+	pol := &beaconv1alpha1.GatewayHealthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Status: beaconv1alpha1.GatewayHealthPolicyStatus{
+			Cluster: beaconv1alpha1.ClusterIdentity{
+				ID: "abc-123", Name: "prod-east",
+				Source: beaconv1alpha1.ClusterIdentitySourceOpenShift,
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pol).Build()
+
+	b := &Builder{Client: cl, PolicyName: "cluster"}
+	g, err := b.Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if g.SchemaVersion != SchemaVersion {
+		t.Fatalf("expected SchemaVersion %q, got %q", SchemaVersion, g.SchemaVersion)
+	}
+	want := ClusterInfo{ID: "abc-123", Name: "prod-east", Source: "OpenShiftClusterVersion"}
+	if g.Cluster != want {
+		t.Fatalf("Cluster = %+v, want %+v", g.Cluster, want)
+	}
+}
+
 func TestBuild_TimerSurfacedInStatus(t *testing.T) {
 	s := scheme(t)
 	pool := &metallb.IPAddressPool{

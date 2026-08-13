@@ -91,14 +91,22 @@ type routeInfo struct {
 
 // Build produces a full topology Graph.
 func (b *Builder) Build(ctx context.Context) (*Graph, error) {
-	g := &Graph{GeneratedAt: time.Now(), OperatorVersion: version.Get()}
+	g := &Graph{GeneratedAt: time.Now(), OperatorVersion: version.Get(), SchemaVersion: SchemaVersion}
 	g.ConsoleBaseURL = b.consoleBaseURL(ctx)
 
 	// Load policy (config + status). Status is shared across all replicas, so
 	// using it for advertisement/timer keeps the dashboard consistent
-	// regardless of which replica serves the request.
+	// regardless of which replica serves the request. Cluster identity is
+	// likewise read from the shared status (computed once by the reconciling
+	// leader) rather than re-resolved here, so it stays consistent across
+	// replicas and requires no extra RBAC for the dashboard path.
 	pol := b.loadPolicy(ctx)
 	spec := &pol.Spec
+	g.Cluster = ClusterInfo{
+		ID:     pol.Status.Cluster.ID,
+		Name:   pol.Status.Cluster.Name,
+		Source: string(pol.Status.Cluster.Source),
+	}
 	if spec.MetalLB.Namespace == "" {
 		spec.MetalLB.Namespace = "metallb-system"
 	}

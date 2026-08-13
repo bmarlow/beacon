@@ -142,6 +142,55 @@ type GatewayHealthPolicySpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	Paused bool `json:"paused,omitempty"`
+
+	// ClusterName optionally overrides the human-readable cluster name Beacon
+	// reports about itself in status.cluster.name. Intended for multi-cluster
+	// fleets where a hub cluster aggregates status from many Beacon instances
+	// (e.g. one running on each cluster managed by Red Hat Advanced Cluster
+	// Management). When unset, Beacon derives a name from the OpenShift
+	// Infrastructure resource (status.infrastructureName) if available.
+	// +optional
+	ClusterName string `json:"clusterName,omitempty"`
+}
+
+// ClusterIdentitySource records how Beacon determined a cluster's identity.
+// +kubebuilder:validation:Enum=OpenShiftClusterVersion;KubeSystemUID;Manual
+type ClusterIdentitySource string
+
+const (
+	// ClusterIdentitySourceOpenShift means ID came from the OpenShift
+	// ClusterVersion UUID (config.openshift.io), the same identifier used by
+	// OpenShift Cluster Manager/telemetry and surfaced by Red Hat Advanced
+	// Cluster Management as the "id.openshift.io" ClusterClaim.
+	ClusterIdentitySourceOpenShift ClusterIdentitySource = "OpenShiftClusterVersion"
+	// ClusterIdentitySourceKubeSystem means ID came from the kube-system
+	// Namespace UID, stable on any Kubernetes cluster and the identifier
+	// behind RHACM's "id.k8s.io" ClusterClaim. Used when the OpenShift
+	// ClusterVersion resource is unavailable (e.g. non-OpenShift clusters).
+	ClusterIdentitySourceKubeSystem ClusterIdentitySource = "KubeSystemUID"
+	// ClusterIdentitySourceManual means no stable ID could be auto-detected;
+	// only a user-supplied spec.clusterName (if any) is available.
+	ClusterIdentitySourceManual ClusterIdentitySource = "Manual"
+)
+
+// ClusterIdentity identifies the cluster this Beacon instance is running on.
+// Populated automatically each reconcile; used by multi-cluster fleets (e.g. a
+// hub cluster running Red Hat Advanced Cluster Management) to correlate
+// per-cluster Beacon status without any extra mapping configuration.
+type ClusterIdentity struct {
+	// ID is a stable, unique cluster identifier suitable for cross-cluster
+	// correlation. See ClusterIdentitySource for how it was determined.
+	// +optional
+	ID string `json:"id,omitempty"`
+
+	// Name is the effective human-readable cluster name: spec.clusterName if
+	// set, else the OpenShift Infrastructure infrastructureName, else empty.
+	// +optional
+	Name string `json:"name,omitempty"`
+
+	// Source records how ID was determined.
+	// +optional
+	Source ClusterIdentitySource `json:"source,omitempty"`
 }
 
 // ZeroReplicasPolicy enumerates how a scaled-to-zero backend Service is treated.
@@ -207,6 +256,12 @@ type GatewayHealthPolicyStatus struct {
 	// +listMapKey=namespace
 	// +listMapKey=name
 	Gateways []GatewayStatus `json:"gateways,omitempty"`
+
+	// Cluster identifies the cluster this Beacon instance is running on. See
+	// ClusterIdentity for details; primarily useful for multi-cluster fleets
+	// aggregating status from many Beacon instances.
+	// +optional
+	Cluster ClusterIdentity `json:"cluster,omitempty"`
 
 	// Conditions represent the latest available observations of the policy's
 	// state.
