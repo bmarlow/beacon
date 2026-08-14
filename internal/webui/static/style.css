@@ -264,6 +264,8 @@ a.name.link::after { content: " \2197"; font-size: 10px; color: var(--text-secon
   font-size: 12px;
 }
 .rh-footer-brand { color: var(--rh-gray-30); }
+/* Push the operator version to the right edge of the footer. */
+.rh-footer-version { margin-left: auto; }
 .err { color: #ff8a80; font-weight: 500; }
 
 .pill-ip { font-family: var(--font-mono); }
