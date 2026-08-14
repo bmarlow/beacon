@@ -2,7 +2,7 @@
 IMG ?= ghcr.io/bmarlow/beacon:latest
 # Bundle image
 BUNDLE_IMG ?= ghcr.io/bmarlow/beacon-bundle:latest
-VERSION ?= 0.1.21
+VERSION ?= 0.1.22
 
 # OLM channel configuration (baked into the bundle metadata).
 CHANNELS ?= stable

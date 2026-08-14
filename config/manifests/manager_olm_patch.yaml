@@ -46,6 +46,20 @@ spec:
             # the oauth-proxy sidecar.
             - --dashboard-bind-address=127.0.0.1:8082
             - --dashboard-auth-required=true
+          ports:
+            # Replace (not merge) the base's ports in the OLM deployment. The
+            # base names a `dashboard` (8082) port for the non-OLM/dev path where
+            # the manager serves the dashboard directly. Under OLM the manager
+            # binds the dashboard to localhost and the oauth-proxy sidecar owns
+            # the `dashboard` port name (9443); keeping the manager's `dashboard`
+            # port too would collide, and the dashboard Service's named
+            # targetPort (`dashboard`) resolves to the FIRST matching container
+            # port — wrongly routing the reencrypt Route to the manager's
+            # plain-HTTP 8082 instead of the proxy's HTTPS 9443 (HTTP 503).
+            - $patch: replace
+            - containerPort: 8443
+              name: metrics
+              protocol: TCP
           volumeMounts:
             - name: metrics-tls
               mountPath: /etc/metrics/tls
