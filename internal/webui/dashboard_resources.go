@@ -20,9 +20,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
-	"os"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -36,16 +33,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"github.com/bmarlow/beacon/internal/podnamespace"
 )
 
 const (
-	dashboardName       = "beacon-dashboard"
-	dashboardPortName   = "dashboard"
-	controlPlaneLabel   = "control-plane"
-	controlPlaneValue   = "controller-manager"
-	operatorDeployment  = "beacon-controller-manager"
-	podNamespaceEnv     = "POD_NAMESPACE"
-	saNamespaceFilePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	dashboardName      = "beacon-dashboard"
+	dashboardPortName  = "dashboard"
+	controlPlaneLabel  = "control-plane"
+	controlPlaneValue  = "controller-manager"
+	operatorDeployment = "beacon-controller-manager"
 )
 
 var (
@@ -106,7 +103,7 @@ func (m *ResourceManager) NeedLeaderElection() bool { return true }
 func (m *ResourceManager) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("dashboard-resources")
 
-	ns, err := operatorNamespace()
+	ns, err := podnamespace.Get()
 	if err != nil {
 		logger.Info("could not determine operator namespace; skipping dashboard resource management", "error", err.Error())
 		return nil
@@ -156,22 +153,6 @@ func (m *ResourceManager) Start(ctx context.Context) error {
 		logger.Info("Route CRD not present; skipping dashboard Route (non-OpenShift cluster)")
 	}
 	return nil
-}
-
-// operatorNamespace resolves the namespace the operator runs in.
-func operatorNamespace() (string, error) {
-	if v := os.Getenv(podNamespaceEnv); v != "" {
-		return v, nil
-	}
-	data, err := os.ReadFile(saNamespaceFilePath)
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", saNamespaceFilePath, err)
-	}
-	ns := strings.TrimSpace(string(data))
-	if ns == "" {
-		return "", fmt.Errorf("empty namespace in %s", saNamespaceFilePath)
-	}
-	return ns, nil
 }
 
 // ownerRef returns an OwnerReference to the operator's own Deployment so the

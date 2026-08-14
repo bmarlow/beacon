@@ -122,12 +122,13 @@ type gwState struct {
 // TokenReviews: used by the oauth-proxy sidecar (shares the operator SA) to
 // validate dashboard user tokens.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
-// Secrets: get + create the dashboard oauth cookie Secret only (never updated).
-// list/watch required for the cache-backed Get.
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
-// ServiceAccounts: get + update the operator SA's OAuth redirect annotation.
-// list/watch required for the cache-backed Get.
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;update
+// Secrets (get + create the dashboard oauth cookie Secret) and ServiceAccounts
+// (get + update the operator SA's OAuth redirect annotation) are granted via a
+// namespaced Role scoped to the operator's own namespace, not a ClusterRole —
+// both are only ever touched there. See config/rbac/dashboard_role.yaml (or,
+// for the OLM-bundled install, the CSV's "permissions" block) and the manager
+// cache's Cache.ByObject scoping in cmd/main.go, which restricts these two
+// types' informers to that same namespace so a namespaced Role suffices.
 // GatewayHealthPolicy: read/watch config; only the status subresource is written
 // (via Patch). The spec is never modified.
 // +kubebuilder:rbac:groups=beacon.io,resources=gatewayhealthpolicies,verbs=get;list;watch
@@ -457,6 +458,15 @@ func deref(t *time.Time, fallback time.Time) time.Time {
 	return *t
 }
 
+// timeToMeta converts an optional *time.Time to *metav1.Time, nil-safe.
+func timeToMeta(t *time.Time) *metav1.Time {
+	if t == nil {
+		return nil
+	}
+	mt := metav1.NewTime(*t)
+	return &mt
+}
+
 func (r *GatewayReconciler) event(gw *gwapiv1.Gateway, eventType, reason, msg string) {
 	if r.Recorder != nil {
 		r.Recorder.Event(gw, eventType, reason, msg)
@@ -605,6 +615,17 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 			Health:        st.health,
 			Advertisement: st.advertisement,
 		}
+		// LastTransitionTime is when Health most recently flipped between
+		// failing (Unhealthy) and not-failing (Healthy/Exempt/Unknown) — the
+		// same instant the dampening timers above are measured from. Surfaced
+		// in shared status (not just leader-local state) so every dashboard
+		// replica, and any future multi-cluster consumer, can compute an
+		// accurate "time in status" / staleness signal.
+		if st.health == beaconv1alpha1.HealthUnhealthy {
+			gs.LastTransitionTime = timeToMeta(st.sinceUnhealthy)
+		} else {
+			gs.LastTransitionTime = timeToMeta(st.sinceHealthy)
+		}
 		if st.timer != nil {
 			gs.Timer = &beaconv1alpha1.TimerStatus{
 				Kind:             st.timer.Kind,
@@ -645,6 +666,8 @@ func (r *GatewayReconciler) updatePolicyStatus(ctx context.Context, pol *beaconv
 
 	patch := client.MergeFrom(pol.DeepCopy())
 	pol.Status.ObservedGeneration = pol.Generation
+	now := metav1.Now()
+	pol.Status.LastReconciled = &now
 	pol.Status.ManagedGateways = managed
 	pol.Status.AdvertisedIPs = advertised
 	pol.Status.WithdrawnIPs = withdrawn

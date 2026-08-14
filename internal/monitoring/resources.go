@@ -23,8 +23,6 @@ package monitoring
 import (
 	"context"
 	"fmt"
-	"os"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -37,18 +35,18 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+
+	"github.com/bmarlow/beacon/internal/podnamespace"
 )
 
 const (
-	metricsServiceName  = "beacon-metrics"
-	metricsTLSSecret    = "beacon-metrics-tls"
-	serviceMonitorName  = "beacon-controller-manager"
-	prometheusRuleName  = "beacon-alerts"
-	operatorDeployment  = "beacon-controller-manager"
-	controlPlaneLabel   = "control-plane"
-	controlPlaneValue   = "controller-manager"
-	podNamespaceEnv     = "POD_NAMESPACE"
-	saNamespaceFilePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+	metricsServiceName = "beacon-metrics"
+	metricsTLSSecret   = "beacon-metrics-tls"
+	serviceMonitorName = "beacon-controller-manager"
+	prometheusRuleName = "beacon-alerts"
+	operatorDeployment = "beacon-controller-manager"
+	controlPlaneLabel  = "control-plane"
+	controlPlaneValue  = "controller-manager"
 )
 
 var (
@@ -75,7 +73,7 @@ func (m *Manager) NeedLeaderElection() bool { return true }
 func (m *Manager) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("monitoring")
 
-	ns, err := operatorNamespace()
+	ns, err := podnamespace.Get()
 	if err != nil {
 		logger.Info("could not determine operator namespace; skipping monitoring resources", "error", err.Error())
 		return nil
@@ -103,21 +101,6 @@ func (m *Manager) Start(ctx context.Context) error {
 		logger.Info("ensured PrometheusRule", "name", prometheusRuleName)
 	}
 	return nil
-}
-
-func operatorNamespace() (string, error) {
-	if v := os.Getenv(podNamespaceEnv); v != "" {
-		return v, nil
-	}
-	data, err := os.ReadFile(saNamespaceFilePath)
-	if err != nil {
-		return "", fmt.Errorf("reading %s: %w", saNamespaceFilePath, err)
-	}
-	ns := strings.TrimSpace(string(data))
-	if ns == "" {
-		return "", fmt.Errorf("empty namespace")
-	}
-	return ns, nil
 }
 
 func (m *Manager) ownerRef(ctx context.Context, ns string) *metav1.OwnerReference {

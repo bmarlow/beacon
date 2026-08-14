@@ -19,6 +19,9 @@ package export
 import (
 	"reflect"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
 )
@@ -79,5 +82,33 @@ func TestBuild_NoPolicyYieldsEmptySummary(t *testing.T) {
 	}
 	if s.ManagedGateways != 0 || len(s.Gateways) != 0 {
 		t.Fatalf("expected zero-value counts/gateways, got %+v", s)
+	}
+	if s.LastReconciled != nil {
+		t.Fatalf("expected nil LastReconciled when the policy has never reconciled, got %v", s.LastReconciled)
+	}
+}
+
+// TestBuild_LastReconciledIsAFreshnessSignalDistinctFromGeneratedAt verifies
+// LastReconciled reflects the underlying status's timestamp (which can be
+// arbitrarily old / stuck), not the current wall-clock time GeneratedAt
+// always uses — the whole point of the field.
+func TestBuild_LastReconciledIsAFreshnessSignalDistinctFromGeneratedAt(t *testing.T) {
+	stuckSince := time.Now().Add(-1 * time.Hour)
+	reconciled := metav1.NewTime(stuckSince)
+	pol := &beaconv1alpha1.GatewayHealthPolicy{
+		Status: beaconv1alpha1.GatewayHealthPolicyStatus{LastReconciled: &reconciled},
+	}
+
+	s := Build(pol)
+
+	if s.LastReconciled == nil {
+		t.Fatal("expected LastReconciled to be set")
+	}
+	if !s.LastReconciled.Truncate(time.Second).Equal(stuckSince.Truncate(time.Second)) {
+		t.Fatalf("LastReconciled = %v, want %v", s.LastReconciled, stuckSince)
+	}
+	if s.GeneratedAt.Sub(*s.LastReconciled) < 55*time.Minute {
+		t.Fatalf("expected GeneratedAt (%v) to be well after the stuck LastReconciled (%v), "+
+			"demonstrating a hub could detect staleness from this gap", s.GeneratedAt, s.LastReconciled)
 	}
 }

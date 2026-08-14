@@ -384,6 +384,18 @@ spec:
                 - namespace
                 - name
                 x-kubernetes-list-type: map
+              lastReconciled:
+                description: |-
+                  LastReconciled is when this status was last successfully written,
+                  updated on every reconcile regardless of whether anything changed
+                  (unlike Conditions[].lastTransitionTime, which only updates when a
+                  condition's status flips). This is the freshness signal a consumer —
+                  the dashboard, or a multi-cluster hub polling the summary export
+                  endpoint — should use to detect a stuck or crashed controller, since
+                  every other status field can otherwise look perfectly valid while
+                  simply being stale.
+                format: date-time
+                type: string
               managedGateways:
                 description: |-
                   ManagedGateways is the number of Gateways currently under management

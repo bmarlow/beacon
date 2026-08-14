@@ -28,6 +28,8 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -41,6 +43,7 @@ import (
 	"github.com/bmarlow/beacon/internal/metallb"
 	"github.com/bmarlow/beacon/internal/metrics"
 	"github.com/bmarlow/beacon/internal/monitoring"
+	"github.com/bmarlow/beacon/internal/podnamespace"
 	"github.com/bmarlow/beacon/internal/state"
 	"github.com/bmarlow/beacon/internal/webui"
 	// +kubebuilder:scaffold:imports
@@ -123,9 +126,33 @@ func main() {
 		metricsOpts.KeyName = "tls.key"
 	}
 
+	// Secrets and ServiceAccounts are only ever read/written in the operator's
+	// own namespace (the dashboard's oauth-proxy cookie Secret and the
+	// operator's own ServiceAccount OAuth-redirect annotation — see
+	// internal/webui/dashboard_resources.go). RBAC for both is a namespaced
+	// Role, not a cluster-wide ClusterRole (see config/rbac/dashboard_role.yaml
+	// and the CSV's "permissions" block), so the cache's informers for these
+	// two types must be scoped to that same namespace — an unscoped,
+	// cluster-wide List/Watch would otherwise be denied and the cache would
+	// never sync. When the namespace can't be determined (e.g. running
+	// locally outside a cluster), fall back to an unscoped cache; the
+	// dashboard/monitoring resource managers already degrade gracefully in
+	// that case (they skip their own namespace-scoped work and log why).
+	cacheOpts := cache.Options{}
+	if ns, err := podnamespace.Get(); err == nil {
+		cacheOpts.ByObject = map[client.Object]cache.ByObject{
+			&corev1.Secret{}:         {Namespaces: map[string]cache.Config{ns: {}}},
+			&corev1.ServiceAccount{}: {Namespaces: map[string]cache.Config{ns: {}}},
+		}
+	} else {
+		setupLog.Info("could not determine operator namespace; caching Secrets/ServiceAccounts cluster-wide",
+			"error", err.Error())
+	}
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme:  runtimeScheme,
 		Metrics: metricsOpts,
+		Cache:   cacheOpts,
 		WebhookServer: webhook.NewServer(webhook.Options{
 			TLSOpts: []func(*tls.Config){disableHTTP2},
 		}),
@@ -155,6 +182,18 @@ func main() {
 		os.Exit(1)
 	}
 	// +kubebuilder:scaffold:builder
+
+	// Republishes gauge metrics from the shared GatewayHealthPolicy status on
+	// every replica (not just the leader, which is the only one running the
+	// reconcile loop above) — see MetricsReporter's doc comment for why this
+	// matters once the operator runs with >1 replica.
+	if err := (&controller.MetricsReporter{
+		Client:     mgr.GetClient(),
+		PolicyName: policyName,
+	}).AddToManager(mgr); err != nil {
+		setupLog.Error(err, "unable to register metrics reporter")
+		os.Exit(1)
+	}
 
 	// Topology dashboard (read-only web UI). Runs on every replica.
 	if dashboardAddr != "" {

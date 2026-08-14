@@ -774,9 +774,22 @@ probe rules as the reconciler (probe-less pods are `Exempt`).
   # NAME      MANAGED   ADVERTISED   WITHDRAWN   PAUSED   AGE
   # cluster   3         2            1           false    29m
   ```
+  `status.lastReconciled` is updated on **every** successful reconcile,
+  regardless of whether anything changed — unlike `status.conditions[Ready]
+  .lastTransitionTime`, which only moves when the condition's status flips
+  and can otherwise look stuck at a stale "everything is fine" timestamp.
+  Use `lastReconciled` (also surfaced in `/api/topology` and the multi-cluster
+  export endpoint) to detect a wedged or crashed controller even though its
+  HTTP endpoints keep responding.
 - **Metrics**: the manager serves Prometheus metrics on `:8443` (HTTPS; HTTP/2
   disabled to mitigate Rapid Reset CVE-2023-44487 / CVE-2023-39325). Beacon
-  exposes domain metrics in addition to the controller-runtime defaults:
+  exposes domain metrics in addition to the controller-runtime defaults. These
+  gauges are republished every 15s from the shared, cross-replica
+  `GatewayHealthPolicy.status` (not just computed by whichever replica happens
+  to be the leader), so **every** replica's `/metrics` reports identical,
+  correct values — important since the reconcile loop itself (and thus the
+  live computation these gauges mirror) only ever runs on the leader, but the
+  metrics Service load-balances scrapes across all replicas.
 
   Every metric below carries a `cluster` label (see [Cluster identity and
   multi-cluster fleets](#cluster-identity-and-multi-cluster-fleets)) — the
@@ -886,6 +899,7 @@ dashboard instead.
 {
   "schemaVersion": "v1",
   "generatedAt": "2026-08-13T12:00:00Z",
+  "lastReconciled": "2026-08-13T11:59:47Z",
   "operatorVersion": "v0.1.20",
   "cluster": { "id": "3fa1e2b0-...", "name": "prod-east", "source": "OpenShiftClusterVersion" },
   "managedGateways": 3,
@@ -897,6 +911,13 @@ dashboard instead.
   ]
 }
 ```
+
+`generatedAt` is always "now" (set fresh on every request) and on its own cannot tell a hub
+whether the underlying data is current. `lastReconciled` mirrors `status.lastReconciled` (see
+[Observability](#observability)) and **does** move only when the controller actually makes
+progress — a hub polling this endpoint should watch for `lastReconciled` failing to advance
+across successive polls (while `generatedAt` keeps updating) as the signal that a cluster's
+Beacon has stopped reconciling even though its export endpoint is still reachable.
 
 **Disabled by default.** Enable it with `--export-bind-address=:8083` (see [Manager
 flags](#manager-flags)). It is intentionally **not** fronted by the oauth-proxy sidecar the
@@ -933,7 +954,10 @@ dashboard uses — that flow is for interactive human logins, not a hub's Servic
 Service/Route for this port automatically the way it does for the dashboard — expose it
 yourself (a `ClusterIP`/`LoadBalancer` Service, or an OpenShift `Route`) to reach it from
 outside the pod network. There is also no hub component yet; this endpoint is the piece a
-future hub would poll.
+future hub would poll. Neither `GatewayHealthPolicy.status.gateways` nor this endpoint's
+`gateways` list is paginated or capped — for fleets with very large numbers of Gateways on a
+single cluster, watch for the CR status approaching etcd's per-object size limit before that
+becomes a practical concern.
 
 ### Annotations
 

@@ -107,6 +107,10 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 		Name:   pol.Status.Cluster.Name,
 		Source: string(pol.Status.Cluster.Source),
 	}
+	if pol.Status.LastReconciled != nil {
+		t := pol.Status.LastReconciled.Time
+		g.LastReconciled = &t
+	}
 	if spec.MetalLB.Namespace == "" {
 		spec.MetalLB.Namespace = "metallb-system"
 	}
@@ -549,6 +553,9 @@ func snapshotsFromPolicyStatus(pol *beaconv1alpha1.GatewayHealthPolicy) map[type
 			Health:        string(gs.Health),
 			Advertisement: string(gs.Advertisement),
 			Message:       gs.Message,
+		}
+		if gs.LastTransitionTime != nil {
+			snap.LastTransition = gs.LastTransitionTime.Time
 		}
 		if gs.Timer != nil {
 			snap.Timer = &state.TimerStatus{

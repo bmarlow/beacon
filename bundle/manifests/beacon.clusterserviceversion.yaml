@@ -93,15 +93,27 @@ spec:
     * `consoles` (read), `routes` (read + create/update), `consolelinks`
       (read + create/update) — discover the console URL and publish/own the
       dashboard Route + launcher link.
-    * `subjectaccessreviews` (create) — per-user dashboard authorization.
+    * `clusterversions`, `infrastructures` (read, config.openshift.io) and
+      `namespaces` (read) — resolve a stable cluster identity
+      (`status.cluster`), groundwork for multi-cluster fleets (e.g. Red Hat
+      Advanced Cluster Management). See "Cluster identity and multi-cluster
+      fleets" in the README.
+    * `subjectaccessreviews` (create) — per-user dashboard authorization, and
+      authorizing the multi-cluster summary export endpoint (disabled by
+      default; see `--export-bind-address` in the README).
     * `tokenreviews` (create) — used by the oauth-proxy sidecar (shares the
-      operator SA) to validate dashboard user tokens.
-    * `secrets` (read + create) — provision the oauth-proxy cookie Secret (never
-      updated).
-    * `serviceaccounts` (read + update) — set the operator SA's OAuth redirect
-      annotation.
+      operator SA) to validate dashboard user tokens, and by the export
+      endpoint above.
     * `servicemonitors`, `prometheusrules` (read + create/update,
       monitoring.coreos.com) — wire metrics into OpenShift monitoring.
+
+    Two permissions are deliberately granted via a **namespaced Role** (OLM's
+    `permissions`, created in the operator's own install namespace) rather than
+    this ClusterRole, since the operator only ever touches them there: `secrets`
+    (read + create the oauth-proxy cookie Secret) and `serviceaccounts` (read +
+    update the operator's own OAuth redirect annotation). The manager's cache
+    scopes these two types' informers to that same namespace so this narrower
+    grant is sufficient.
 
     See the project README for full details.
   keywords:
@@ -171,6 +183,8 @@ spec:
             displayName: Advertised IPs
           - path: withdrawnIPs
             displayName: Withdrawn IPs
+          - path: lastReconciled
+            displayName: Last Reconciled
   install:
     strategy: deployment
     spec:
@@ -221,6 +235,16 @@ spec:
             - apiGroups: ["config.openshift.io"]
               resources: ["consoles"]
               verbs: ["get", "list", "watch"]
+            # Cluster identity (status.cluster): read-only, groundwork for
+            # multi-cluster fleets correlating Beacon status with Red Hat
+            # Advanced Cluster Management. list/watch required for the
+            # cache-backed Get.
+            - apiGroups: ["config.openshift.io"]
+              resources: ["clusterversions", "infrastructures"]
+              verbs: ["get", "list", "watch"]
+            - apiGroups: [""]
+              resources: ["namespaces"]
+              verbs: ["get", "list", "watch"]
             # Dashboard Route/ConsoleLink and monitoring CRs: read/watch (cache)
             # + create/update used to provision them. No patch/delete.
             - apiGroups: ["route.openshift.io"]
@@ -241,16 +265,11 @@ spec:
             - apiGroups: ["authentication.k8s.io"]
               resources: ["tokenreviews"]
               verbs: ["create"]
-            # Secrets: get + create the dashboard oauth cookie Secret only (never
-            # updated). list/watch required for the cache-backed Get.
-            - apiGroups: [""]
-              resources: ["secrets"]
-              verbs: ["get", "list", "watch", "create"]
-            # ServiceAccounts: get + update the operator SA's OAuth redirect
-            # annotation. list/watch required for the cache-backed Get.
-            - apiGroups: [""]
-              resources: ["serviceaccounts"]
-              verbs: ["get", "list", "watch", "update"]
+      # Secrets/ServiceAccounts are only ever touched in the operator's own
+      # (install) namespace, so they're a namespaced Role (below) rather than a
+      # cluster-wide permission — OLM creates this Role/RoleBinding in whatever
+      # namespace the operator is installed into. The manager's cache scopes
+      # these two types' informers to that same namespace (cmd/main.go).
       permissions:
         - serviceAccountName: beacon-controller-manager
           rules:
@@ -263,6 +282,16 @@ spec:
             - apiGroups: [""]
               resources: ["events"]
               verbs: ["create", "patch"]
+            # Secrets: get + create the dashboard oauth cookie Secret only (never
+            # updated). list/watch required for the cache-backed Get.
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch", "create"]
+            # ServiceAccounts: get + update the operator SA's OAuth redirect
+            # annotation. list/watch required for the cache-backed Get.
+            - apiGroups: [""]
+              resources: ["serviceaccounts"]
+              verbs: ["get", "list", "watch", "update"]
       deployments:
         - name: beacon-controller-manager
           label:

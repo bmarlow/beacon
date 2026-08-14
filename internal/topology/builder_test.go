@@ -222,6 +222,51 @@ func TestBuild_WithdrawnReflectsInStatus(t *testing.T) {
 	}
 }
 
+// TestBuild_LastTransitionTimeFromStatus verifies a Gateway's
+// status.gateways[].lastTransitionTime (written by the reconciling leader)
+// flows through to the dashboard's StatusTiming — the mechanism that makes
+// "time in status" accurate on every replica, not just the leader.
+func TestBuild_LastTransitionTimeFromStatus(t *testing.T) {
+	s := scheme(t)
+	pool := &metallb.IPAddressPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "metallb-system"},
+		Spec:       metallb.IPAddressPoolSpec{Addresses: []string{"192.0.2.0/24"}},
+	}
+	gw := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "app"},
+		Status:     gwapiv1.GatewayStatus{Addresses: []gwapiv1.GatewayStatusAddress{{Value: "192.0.2.5"}}},
+	}
+	since := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	pol := &beaconv1alpha1.GatewayHealthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
+		Status: beaconv1alpha1.GatewayHealthPolicyStatus{
+			Gateways: []beaconv1alpha1.GatewayStatus{{
+				Namespace: "app", Name: "gw",
+				Health: beaconv1alpha1.HealthHealthy, Advertisement: beaconv1alpha1.AdvertisementAdvertised,
+				LastTransitionTime: &since,
+			}},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(pool, gw, pol).Build()
+
+	b := &Builder{Client: cl, PolicyName: "cluster"}
+	g, err := b.Build(context.Background())
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if len(g.Pools) != 1 || len(g.Pools[0].IPs) != 1 || len(g.Pools[0].IPs[0].Gateways) != 1 {
+		t.Fatalf("expected 1 pool/ip/gateway, got %+v", g.Pools)
+	}
+	node := g.Pools[0].IPs[0].Gateways[0]
+	if node.StatusForSeconds < 250 || node.StatusForSeconds > 350 {
+		t.Fatalf("expected StatusForSeconds ~300 (5m), got %d", node.StatusForSeconds)
+	}
+	// metav1.Time round-trips at second granularity; compare truncated.
+	if node.StatusSince == nil || !node.StatusSince.Truncate(time.Second).Equal(since.Time.Truncate(time.Second)) {
+		t.Fatalf("expected StatusSince = %v, got %v", since.Time, node.StatusSince)
+	}
+}
+
 // TestBuild_ClusterIdentityFromPolicyStatus verifies the Graph's SchemaVersion
 // is set and Cluster identity is copied from the shared GatewayHealthPolicy
 // status (computed once by the reconciling leader), not re-resolved by the

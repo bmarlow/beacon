@@ -42,6 +42,10 @@ func Build(pol *beaconv1alpha1.GatewayHealthPolicy) *Summary {
 		AdvertisedIPs:   pol.Status.AdvertisedIPs,
 		WithdrawnIPs:    pol.Status.WithdrawnIPs,
 	}
+	if pol.Status.LastReconciled != nil {
+		t := pol.Status.LastReconciled.Time
+		s.LastReconciled = &t
+	}
 	for _, gs := range pol.Status.Gateways {
 		s.Gateways = append(s.Gateways, GatewaySummary{
 			Namespace:     gs.Namespace,

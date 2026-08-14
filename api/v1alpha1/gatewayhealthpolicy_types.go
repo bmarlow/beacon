@@ -235,6 +235,17 @@ type GatewayHealthPolicyStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// LastReconciled is when this status was last successfully written,
+	// updated on every reconcile regardless of whether anything changed
+	// (unlike Conditions[].lastTransitionTime, which only updates when a
+	// condition's status flips). This is the freshness signal a consumer —
+	// the dashboard, or a multi-cluster hub polling the summary export
+	// endpoint — should use to detect a stuck or crashed controller, since
+	// every other status field can otherwise look perfectly valid while
+	// simply being stale.
+	// +optional
+	LastReconciled *metav1.Time `json:"lastReconciled,omitempty"`
+
 	// ManagedGateways is the number of Gateways currently under management
 	// (not exempt and matching the configured class filter).
 	// +optional

@@ -77,8 +77,17 @@ type Graph struct {
 	// SchemaVersion is the version of this JSON contract; see SchemaVersion.
 	SchemaVersion string `json:"schemaVersion"`
 
-	// GeneratedAt is when this snapshot was assembled.
+	// GeneratedAt is when this snapshot was assembled — always "now", since
+	// it's set fresh on every request. It does NOT indicate how stale the
+	// underlying data is; use LastReconciled for that.
 	GeneratedAt time.Time `json:"generatedAt"`
+
+	// LastReconciled is when the controller last successfully wrote the
+	// shared GatewayHealthPolicy status, updated on every reconcile
+	// regardless of whether anything changed. Lets the dashboard (or any
+	// consumer) detect a stuck or crashed controller even though this
+	// endpoint keeps responding. Nil if the policy hasn't reconciled yet.
+	LastReconciled *time.Time `json:"lastReconciled,omitempty"`
 
 	// OperatorVersion is the Beacon operator build version (git describe / tag).
 	OperatorVersion string `json:"operatorVersion"`

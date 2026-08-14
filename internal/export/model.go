@@ -69,8 +69,18 @@ type GatewaySummary struct {
 type Summary struct {
 	// SchemaVersion is the version of this JSON contract; see SchemaVersion.
 	SchemaVersion string `json:"schemaVersion"`
-	// GeneratedAt is when this snapshot was assembled.
+	// GeneratedAt is when this HTTP response was assembled — always "now",
+	// since it's set fresh on every request. It does NOT indicate how stale
+	// the underlying data is; use LastReconciled for that.
 	GeneratedAt time.Time `json:"generatedAt"`
+	// LastReconciled is when the controller last successfully wrote this
+	// status, updated on every reconcile regardless of whether anything
+	// changed. Unlike GeneratedAt, a consumer (e.g. a multi-cluster hub) can
+	// use this to detect a stuck or crashed controller: if LastReconciled
+	// stops advancing while GeneratedAt keeps updating on every poll, the
+	// operator's reconcile loop is not making progress even though its HTTP
+	// endpoint is still responding. Nil if the policy hasn't reconciled yet.
+	LastReconciled *time.Time `json:"lastReconciled,omitempty"`
 	// OperatorVersion is the Beacon operator build version (git describe/tag).
 	OperatorVersion string `json:"operatorVersion"`
 	// Cluster identifies the cluster this summary was generated on.

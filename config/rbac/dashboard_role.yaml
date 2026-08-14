@@ -1,0 +1,45 @@
+---
+# Secrets/ServiceAccounts are only ever read/written in the operator's own
+# namespace (the dashboard's oauth-proxy cookie Secret and the operator's own
+# ServiceAccount OAuth-redirect annotation), so these live in a namespaced Role
+# rather than the cluster-wide beacon-manager-role ClusterRole. The manager's
+# cache scopes these two types' informers to this same namespace (see
+# cmd/main.go), so a namespaced Role is sufficient.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: beacon-dashboard-role
+  namespace: beacon-system
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+  - apiGroups:
+      - ""
+    resources:
+      - serviceaccounts
+    verbs:
+      - get
+      - list
+      - watch
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: beacon-dashboard-rolebinding
+  namespace: beacon-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: beacon-dashboard-role
+subjects:
+  - kind: ServiceAccount
+    name: beacon-controller-manager
+    namespace: beacon-system
