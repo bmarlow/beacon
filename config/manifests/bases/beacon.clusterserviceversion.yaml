@@ -21,7 +21,7 @@ metadata:
       ]
     capabilities: Seamless Upgrades
     categories: Networking
-    containerImage: ghcr.io/bmarlow/beacon@sha256:a1224b65844c92b41ecced929562d058dd6120c4b638fbd2502a11875d2f6e87
+    containerImage: ghcr.io/bmarlow/beacon@sha256:a3d9dd6022001ff321e7aff494a13a5657ae0cc8d81cdcdde8262bedd6c29298
     createdAt: "2026-08-13T23:00:00Z"
     description: Beacon integrates Gateway API Gateway health with MetalLB BGP advertisements,
       withdrawing and restoring individual load-balancer routes based on backing-workload
