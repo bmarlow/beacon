@@ -35,6 +35,9 @@ Gateway API itself doesn't provide.
   - [Dampening state machine](#dampening-state-machine)
 - [Skupper-linked (remote) backends](#skupper-linked-remote-backends)
 - [Prerequisites](#prerequisites)
+- [Container images](#container-images)
+  - [Multi-architecture builds](#multi-architecture-builds)
+  - [Sidecar image and disconnected / air-gapped clusters](#sidecar-image-and-disconnected--air-gapped-clusters)
 - [Installation](#installation)
   - [Install via OLM (OperatorHub)](#install-via-olm-operatorhub)
   - [Install with kustomize](#install-with-kustomize)
@@ -50,7 +53,10 @@ Gateway API itself doesn't provide.
   - [Finding the dashboard](#finding-the-dashboard)
 - [Observability](#observability)
 - [Configuration reference](#configuration-reference)
+  - [Cluster identity and multi-cluster fleets](#cluster-identity-and-multi-cluster-fleets)
 - [Architecture](#architecture)
+  - [Runtime components](#runtime-components)
+  - [Source layout](#source-layout)
 - [Development](#development)
 - [FAQ / troubleshooting](#faq--troubleshooting)
 - [License](#license)
@@ -442,6 +448,43 @@ of the latter two so the deployed operator reports a proper version.
 > (Repository → Packages → beacon → Package settings → Change visibility), or
 > configure an image pull secret referencing a token with `read:packages`.
 
+### Multi-architecture builds
+
+`make docker-build` builds a single-arch image for the host platform. To publish
+a manifest-list image that runs on both x86 and ARM spoke clusters (e.g. AWS
+Graviton or bare-metal ARM), use the buildx target:
+
+```bash
+make docker-buildx IMG=ghcr.io/<you>/beacon:X.Y.Z            # linux/amd64 + linux/arm64
+make docker-buildx IMG=... PLATFORMS=linux/amd64,linux/arm64,linux/ppc64le,linux/s390x
+```
+
+The `Dockerfile` cross-compiles via `TARGETOS`/`TARGETARCH`, so no emulation is
+needed. (`Dockerfile.prebuilt` remains available for packaging a locally
+cross-compiled `manager-<arch>` binary when you want to avoid QEMU on a laptop.)
+
+### Sidecar image and disconnected / air-gapped clusters
+
+The dashboard's authenticated OLM deployment adds an **OpenShift oauth-proxy**
+sidecar. The bundle references the supported, portable image
+`registry.redhat.io/openshift4/ose-oauth-proxy:v4.14` (pinned to the floor of
+the supported OpenShift range so it resolves across `v4.14`–`v4.21`). It is
+pulled with the cluster's Red Hat entitlement, present on OpenShift by default.
+
+For **disconnected / air-gapped** fleets, mirror both images to your internal
+registry and remap them:
+
+- **Operator image** (`ghcr.io/bmarlow/beacon`) and **oauth-proxy image** —
+  mirror with `oc adm catalog mirror` / `oc image mirror`, then apply an
+  `ImageDigestMirrorSet` (or `ImageTagMirrorSet`) so nodes pull from the mirror.
+- Alternatively, override the operator image per-cluster via the `Subscription`'s
+  `spec.config.env`/image, and the oauth-proxy image by editing the mirrored
+  bundle. Prefer the mirror-set approach so the pinned references stay intact.
+
+This portability is deliberate: the bundle no longer references a
+release-payload-internal digest (which was not portable across clusters or
+OpenShift versions).
+
 ---
 
 ## Installation
@@ -458,7 +501,15 @@ To install the bundle directly (what the reference deployment uses), build/push
 the bundle and run it into the `beacon` namespace:
 
 ```bash
-# Build & push the bundle image (the operator image is built by CI on ghcr.io).
+# Regenerate the OLM bundle from the config/ sources, then build & push the
+# bundle image (the operator image itself is built by CI on ghcr.io). The bundle
+# is fully generated — CRD from config/crd, RBAC/Deployment from
+# config/rbac + config/manager, CSV metadata from config/manifests — so never
+# hand-edit bundle/manifests; edit config/ and re-run `make bundle`.
+#
+#   make bundle VERSION=0.1.0                      # first release in a channel
+#   make bundle VERSION=0.1.1 REPLACES=beacon.v0.1.0   # add an upgrade-graph edge
+#   make bundle CHANNELS=stable DEFAULT_CHANNEL=stable OPENSHIFT_VERSIONS=v4.14-v4.21
 make bundle VERSION=0.1.0
 make bundle-build bundle-push BUNDLE_IMG=ghcr.io/<you>/beacon-bundle:0.1.0
 
@@ -1023,25 +1074,65 @@ Gateway   xRoutes   Service  EndpointSlice Pod   (HTTP/GRPC/TCP/TLS)  GatewayHea
                                    over the existing BGP session
 ```
 
-Source layout:
+### Runtime components
+
+One Beacon manager runs per cluster as a **cluster-wide, all-namespaces
+controller** (see [Cluster identity and multi-cluster
+fleets](#cluster-identity-and-multi-cluster-fleets) for why this maps cleanly
+onto a hub–spoke fleet). Two replicas run for availability; **leader election**
+(lease `beacon.beacon.io` in the install namespace) ensures only one drives
+reconciliation and mutations at a time. Inside the pod:
+
+- **Manager / reconciler** (`cmd/main.go`, `internal/controller`) — the
+  controller-runtime manager and the `GatewayReconciler`. It `For(Gateway)` and
+  watches Pods, EndpointSlices, Services, Deployments, xRoutes, and the
+  `GatewayHealthPolicy`; any backend change re-enqueues all Gateways. Runs only
+  on the leader.
+- **Cache scoping** — the controller-runtime cache is cluster-wide for the
+  resources Beacon traces, **except** `Secret` and `ServiceAccount` informers,
+  which are scoped to the operator's own install namespace (the only namespaced
+  resources it touches). This keeps the cluster-wide RBAC minimal.
+- **Dampening state machine** (`internal/controller`, `internal/state`) — turns
+  transient health flaps into stable advertise/withdraw decisions using the
+  `withdrawAfter` / `readvertiseAfter` timers, and holds the live state shared
+  with the dashboard and metrics.
+- **Dashboard + oauth-proxy** (`internal/webui`) — an HTTP topology dashboard.
+  Under OLM it binds to localhost and is fronted by the OpenShift oauth-proxy
+  sidecar (per-user access enforced via `SubjectAccessReview`); the operator
+  provisions the dashboard Service/Route/ConsoleLink at runtime on the leader.
+- **Metrics reporter** (`internal/controller/metrics_reporter.go`,
+  `internal/metrics`) — a **non-leader** runnable so every replica exports the
+  current gauge values from shared state (metrics stay available during leader
+  handover). Metrics are TLS-served and labelled with the cluster identity.
+- **Export endpoint** (`internal/export`) — the optional, opt-in, pull-based
+  multi-cluster summary API a future hub polls. Disabled by default; see
+  [Multi-cluster summary export
+  endpoint](#multi-cluster-summary-export-endpoint).
+
+### Source layout
 
 | Path                        | Responsibility                                              |
 | --------------------------- | ---------------------------------------------------------- |
-| `api/v1alpha1/`             | `GatewayHealthPolicy` API types.                          |
+| `api/v1alpha1/`             | `GatewayHealthPolicy` API types (cluster-scoped singleton). |
+| `cmd/main.go`               | Manager entrypoint: scheme/cache setup, leader election, wiring the runnables below. |
+| `internal/controller/`      | `GatewayReconciler` + dampening state machine, MetalLB pool lookup, and the non-leader `MetricsReporter`. |
 | `internal/trace/`           | Gateway → xRoutes → backend Service → EndpointSlice → backend Pod resolution (VIP from proxy Service). |
 | `internal/health/`          | Probe-based health evaluation and exemption rules.        |
+| `internal/policy/`          | Exemption, class filtering, timer-override, and threshold resolution. |
 | `internal/metallb/`         | Minimal MetalLB CR types + IP/pool matching.              |
 | `internal/skupper/`         | Skupper Listener detection + remote-backend health evaluation. |
 | `internal/advertiser/`      | Proxy-drain withdraw/restore logic (scale proxy Deployment; BGP-safe). |
-| `internal/policy/`          | Exemption, class filtering, timer-override resolution.    |
-| `internal/controller/`      | The reconciler and dampening state machine.               |
-| `internal/state/`           | Thread-safe store of live advertisement/health state shared with the UI. |
+| `internal/state/`           | Thread-safe store of live advertisement/health state shared with the UI/metrics. |
 | `internal/topology/`        | Builds the hierarchical, status-annotated topology graph (incl. per-user RBAC filtering). |
-| `internal/webui/`           | Dashboard HTTP server, SubjectAccessReview authorizer, and startup provisioning of the dashboard Service/Route/ConsoleLink + oauth-proxy resources. |
+| `internal/webui/`           | Dashboard HTTP server, `SubjectAccessReview` authorizer, and startup provisioning of the dashboard Service/Route/ConsoleLink + oauth-proxy resources. |
+| `internal/identity/`        | Resolves the stable cluster identity (`status.cluster`), aligned to RHACM ClusterClaims. |
+| `internal/export/`          | Opt-in, authenticated, pull-based multi-cluster summary endpoint for a hub. |
+| `internal/metrics/`         | Prometheus metric definitions (all cluster-labelled).     |
+| `internal/monitoring/`      | Provisions `ServiceMonitor` / `PrometheusRule` for OpenShift monitoring. |
+| `internal/podnamespace/`    | Resolves the operator's own namespace (downward API) for cache scoping and owned-resource placement. |
 | `internal/version/`         | Operator build version (stamped at build time via ldflags). |
-| `cmd/main.go`               | Manager entrypoint.                                       |
-| `config/`                   | CRDs, RBAC, manager deployment (kustomize).               |
-| `bundle/`                   | OLM bundle (CSV + metadata) for OperatorHub.              |
+| `config/`                   | Kustomize sources: CRD, RBAC, manager Deployment, samples, dashboard/monitoring, and the `config/manifests` base consumed by `make bundle`. |
+| `bundle/`                   | Generated OLM bundle (CSV + metadata) for OperatorHub. **Generated by `make bundle` — do not hand-edit; change the `config/` sources instead.** |
 
 ---
 

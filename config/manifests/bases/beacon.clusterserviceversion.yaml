@@ -7,59 +7,22 @@ metadata:
         {
           "apiVersion": "beacon.io/v1alpha1",
           "kind": "GatewayHealthPolicy",
-          "metadata": {
-            "name": "cluster",
-            "namespace": "beacon-system"
-          },
+          "metadata": { "name": "cluster" },
           "spec": {
-            "exemptions": [
-              {
-                "name": "management-gateway",
-                "namespace": "infra"
-              }
-            ],
-            "metallb": {
-              "namespace": "metallb-system"
-            },
-            "minHealthyBackendPercent": 100,
-            "minHealthyPodPercent": 1,
-            "paused": false,
+            "withdrawAfter": "5s",
             "readvertiseAfter": "30s",
             "resyncInterval": "10s",
-            "withdrawAfter": "5s",
-            "zeroReplicasPolicy": "Unhealthy"
-          }
-        },
-        {
-          "apiVersion": "beacon.io/v1alpha1",
-          "kind": "GatewayHealthPolicy",
-          "metadata": {
-            "name": "cluster"
-          },
-          "spec": {
-            "exemptions": [
-              {
-                "name": "management-gateway",
-                "namespace": "infra"
-              }
-            ],
+            "paused": false,
             "metallb": {
               "namespace": "metallb-system"
-            },
-            "minHealthyBackendPercent": 100,
-            "minHealthyPodPercent": 1,
-            "paused": false,
-            "readvertiseAfter": "30s",
-            "resyncInterval": "10s",
-            "withdrawAfter": "5s",
-            "zeroReplicasPolicy": "Unhealthy"
+            }
           }
         }
       ]
     capabilities: Seamless Upgrades
     categories: Networking
     containerImage: ghcr.io/bmarlow/beacon@sha256:f4df341b87d6e3e44dd5ee8bbe513e8817d044e2651d493bb86e28d2938f3614
-    createdAt: "2026-08-14T17:16:40Z"
+    createdAt: "2026-08-13T23:00:00Z"
     description: Beacon integrates Gateway API Gateway health with MetalLB BGP advertisements,
       withdrawing and restoring individual load-balancer routes based on backing-workload
       probe health without flapping BGP sessions.
@@ -67,7 +30,7 @@ metadata:
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
     repository: https://github.com/bmarlow/beacon
     support: Community
-  name: beacon.v0.1.21
+  name: beacon.v0.0.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -197,336 +160,8 @@ spec:
     mediatype: image/png
   install:
     spec:
-      clusterPermissions:
-      - rules:
-        - apiGroups:
-          - ""
-          resources:
-          - events
-          verbs:
-          - create
-          - patch
-        - apiGroups:
-          - ""
-          resources:
-          - namespaces
-          - pods
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - ""
-          resources:
-          - services
-          verbs:
-          - create
-          - get
-          - list
-          - update
-          - watch
-        - apiGroups:
-          - apps
-          resources:
-          - deployments
-          verbs:
-          - get
-          - list
-          - patch
-          - watch
-        - apiGroups:
-          - authentication.k8s.io
-          resources:
-          - tokenreviews
-          verbs:
-          - create
-        - apiGroups:
-          - authorization.k8s.io
-          resources:
-          - subjectaccessreviews
-          verbs:
-          - create
-        - apiGroups:
-          - beacon.io
-          resources:
-          - gatewayhealthpolicies
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - beacon.io
-          resources:
-          - gatewayhealthpolicies/status
-          verbs:
-          - patch
-        - apiGroups:
-          - config.openshift.io
-          resources:
-          - clusterversions
-          - consoles
-          - infrastructures
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - console.openshift.io
-          resources:
-          - consolelinks
-          verbs:
-          - create
-          - get
-          - list
-          - update
-          - watch
-        - apiGroups:
-          - discovery.k8s.io
-          resources:
-          - endpointslices
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - gateway.networking.k8s.io
-          resources:
-          - gateways
-          - grpcroutes
-          - httproutes
-          - tcproutes
-          - tlsroutes
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - metallb.io
-          resources:
-          - ipaddresspools
-          verbs:
-          - get
-          - list
-          - watch
-        - apiGroups:
-          - monitoring.coreos.com
-          resources:
-          - prometheusrules
-          - servicemonitors
-          verbs:
-          - create
-          - get
-          - list
-          - update
-          - watch
-        - apiGroups:
-          - route.openshift.io
-          resources:
-          - routes
-          verbs:
-          - create
-          - get
-          - list
-          - update
-          - watch
-        - apiGroups:
-          - skupper.io
-          resources:
-          - listeners
-          verbs:
-          - get
-          - list
-          - watch
-        serviceAccountName: beacon-controller-manager
-      deployments:
-      - label:
-          app.kubernetes.io/name: beacon
-          control-plane: controller-manager
-        name: beacon-controller-manager
-        spec:
-          replicas: 2
-          selector:
-            matchLabels:
-              control-plane: controller-manager
-          strategy: {}
-          template:
-            metadata:
-              annotations:
-                kubectl.kubernetes.io/default-container: manager
-              labels:
-                control-plane: controller-manager
-            spec:
-              affinity:
-                podAntiAffinity:
-                  preferredDuringSchedulingIgnoredDuringExecution:
-                  - podAffinityTerm:
-                      labelSelector:
-                        matchLabels:
-                          control-plane: controller-manager
-                      topologyKey: kubernetes.io/hostname
-                    weight: 100
-              containers:
-              - args:
-                - --leader-elect
-                - --health-probe-bind-address=:8081
-                - --metrics-bind-address=:8443
-                - --metrics-secure=true
-                - --metrics-cert-dir=/etc/metrics/tls
-                - --dashboard-bind-address=127.0.0.1:8082
-                - --dashboard-auth-required=true
-                command:
-                - /manager
-                env:
-                - name: POD_NAMESPACE
-                  valueFrom:
-                    fieldRef:
-                      fieldPath: metadata.namespace
-                image: ghcr.io/bmarlow/beacon@sha256:f4df341b87d6e3e44dd5ee8bbe513e8817d044e2651d493bb86e28d2938f3614
-                livenessProbe:
-                  httpGet:
-                    path: /healthz
-                    port: 8081
-                  initialDelaySeconds: 15
-                  periodSeconds: 20
-                name: manager
-                ports:
-                - containerPort: 8443
-                  name: metrics
-                  protocol: TCP
-                - containerPort: 8082
-                  name: dashboard
-                  protocol: TCP
-                readinessProbe:
-                  httpGet:
-                    path: /readyz
-                    port: 8081
-                  initialDelaySeconds: 5
-                  periodSeconds: 10
-                resources:
-                  limits:
-                    cpu: 500m
-                    memory: 128Mi
-                  requests:
-                    cpu: 10m
-                    memory: 64Mi
-                securityContext:
-                  allowPrivilegeEscalation: false
-                  capabilities:
-                    drop:
-                    - ALL
-                  readOnlyRootFilesystem: true
-                  runAsNonRoot: true
-                volumeMounts:
-                - mountPath: /etc/metrics/tls
-                  name: metrics-tls
-                  readOnly: true
-              - args:
-                - --https-address=:9443
-                - --provider=openshift
-                - --openshift-service-account=beacon-controller-manager
-                - --upstream=http://127.0.0.1:8082
-                - --tls-cert=/etc/tls/private/tls.crt
-                - --tls-key=/etc/tls/private/tls.key
-                - --cookie-secret-file=/etc/proxy/secrets/session_secret
-                - --pass-user-headers=true
-                - --pass-access-token=false
-                image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.14
-                name: oauth-proxy
-                ports:
-                - containerPort: 9443
-                  name: dashboard
-                  protocol: TCP
-                resources:
-                  limits:
-                    cpu: 200m
-                    memory: 128Mi
-                  requests:
-                    cpu: 10m
-                    memory: 64Mi
-                securityContext:
-                  allowPrivilegeEscalation: false
-                  capabilities:
-                    drop:
-                    - ALL
-                  readOnlyRootFilesystem: true
-                  runAsNonRoot: true
-                volumeMounts:
-                - mountPath: /etc/tls/private
-                  name: dashboard-tls
-                - mountPath: /etc/proxy/secrets
-                  name: dashboard-proxy-cookie
-              securityContext:
-                runAsNonRoot: true
-                seccompProfile:
-                  type: RuntimeDefault
-              serviceAccountName: beacon-controller-manager
-              terminationGracePeriodSeconds: 10
-              volumes:
-              - name: dashboard-tls
-                secret:
-                  optional: true
-                  secretName: beacon-dashboard-tls
-              - name: dashboard-proxy-cookie
-                secret:
-                  optional: true
-                  secretName: beacon-dashboard-proxy
-              - name: metrics-tls
-                secret:
-                  optional: true
-                  secretName: beacon-metrics-tls
-      permissions:
-      - rules:
-        - apiGroups:
-          - ""
-          resources:
-          - secrets
-          verbs:
-          - get
-          - list
-          - watch
-          - create
-        - apiGroups:
-          - ""
-          resources:
-          - serviceaccounts
-          verbs:
-          - get
-          - list
-          - watch
-          - update
-        - apiGroups:
-          - ""
-          resources:
-          - configmaps
-          verbs:
-          - get
-          - list
-          - watch
-          - create
-          - update
-          - patch
-          - delete
-        - apiGroups:
-          - coordination.k8s.io
-          resources:
-          - leases
-          verbs:
-          - get
-          - list
-          - watch
-          - create
-          - update
-          - patch
-          - delete
-        - apiGroups:
-          - ""
-          resources:
-          - events
-          verbs:
-          - create
-          - patch
-        serviceAccountName: beacon-controller-manager
-    strategy: deployment
+      deployments: null
+    strategy: ""
   installModes:
   - supported: true
     type: OwnNamespace
@@ -552,5 +187,4 @@ spec:
   minKubeVersion: 1.27.0
   provider:
     name: Beacon Community
-  version: 0.1.21
-  replaces: beacon.v0.1.20
+  version: 0.0.0

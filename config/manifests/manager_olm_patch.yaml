@@ -1,0 +1,93 @@
+# OLM-only Deployment patch.
+#
+# config/manager/manager.yaml is the manager-only base used by the raw kustomize
+# / development install (unauthenticated dashboard on :8082). The OLM install is
+# the supported, authenticated path: this strategic-merge patch layers on the
+# OpenShift oauth-proxy sidecar, the service-serving-cert / cookie volumes, and
+# flips the manager to bind the dashboard on localhost with auth required, so
+# `make bundle` reproduces the full authenticated ClusterServiceVersion
+# deployment from these config/ sources (no hand-editing bundle/manifests).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: beacon-controller-manager
+spec:
+  template:
+    spec:
+      volumes:
+        # Optional so the pod can start before the operator (leader) provisions
+        # these at runtime: the service-ca serving cert (once the annotated
+        # Service exists) and the oauth-proxy cookie Secret. The oauth-proxy
+        # container tolerates a brief crash-loop until both appear.
+        - name: dashboard-tls
+          secret:
+            secretName: beacon-dashboard-tls
+            optional: true
+        - name: dashboard-proxy-cookie
+          secret:
+            secretName: beacon-dashboard-proxy
+            optional: true
+        # service-ca serving cert for the metrics endpoint (minted once the
+        # beacon-metrics Service exists). Optional so the pod starts before the
+        # operator provisions it; controller-runtime self-signs until it appears.
+        - name: metrics-tls
+          secret:
+            secretName: beacon-metrics-tls
+            optional: true
+      containers:
+        - name: manager
+          args:
+            - --leader-elect
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=:8443
+            - --metrics-secure=true
+            - --metrics-cert-dir=/etc/metrics/tls
+            # Dashboard binds to localhost only; it is reachable solely through
+            # the oauth-proxy sidecar.
+            - --dashboard-bind-address=127.0.0.1:8082
+            - --dashboard-auth-required=true
+          volumeMounts:
+            - name: metrics-tls
+              mountPath: /etc/metrics/tls
+              readOnly: true
+        # OpenShift OAuth proxy: authenticates dashboard users against the
+        # cluster and forwards their identity to the dashboard.
+        - name: oauth-proxy
+          # Portable, supported reference (pinned to the floor of the supported
+          # OpenShift range, v4.14-v4.21). Pulled from registry.redhat.io
+          # (entitlement present on OpenShift by default); for disconnected
+          # clusters mirror this image and override via the Subscription's
+          # spec.config or an ImageDigestMirrorSet. See README "Container images".
+          image: registry.redhat.io/openshift4/ose-oauth-proxy:v4.14
+          args:
+            - --https-address=:9443
+            - --provider=openshift
+            - --openshift-service-account=beacon-controller-manager
+            - --upstream=http://127.0.0.1:8082
+            - --tls-cert=/etc/tls/private/tls.crt
+            - --tls-key=/etc/tls/private/tls.key
+            - --cookie-secret-file=/etc/proxy/secrets/session_secret
+            - --pass-user-headers=true
+            - --pass-access-token=false
+          ports:
+            - name: dashboard
+              containerPort: 9443
+              protocol: TCP
+          volumeMounts:
+            - name: dashboard-tls
+              mountPath: /etc/tls/private
+            - name: dashboard-proxy-cookie
+              mountPath: /etc/proxy/secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi

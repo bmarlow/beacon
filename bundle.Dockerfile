@@ -11,9 +11,9 @@ LABEL operators.operatorframework.io.metrics.builder=operator-sdk-v1.42.3
 LABEL operators.operatorframework.io.metrics.mediatype.v1=metrics+v1
 LABEL operators.operatorframework.io.metrics.project_layout=go.kubebuilder.io/v4
 
-# OpenShift version compatibility.
-LABEL com.redhat.openshift.versions="v4.14-v4.21"
-
-# Copy bundle manifests and metadata.
+# Copy files to locations specified by labels.
 COPY bundle/manifests /manifests/
 COPY bundle/metadata /metadata/
+
+# OpenShift version compatibility.
+LABEL com.redhat.openshift.versions="v4.14-v4.21"

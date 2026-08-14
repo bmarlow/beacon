@@ -1,0 +1,25 @@
+# Kustomize base consumed by `make bundle`:
+#   operator-sdk generate kustomize manifests  (reads the CSV base below)
+#   kustomize build config/manifests | operator-sdk generate bundle
+#
+# It layers the CRD, RBAC, manager Deployment, and sample CR on top of the
+# hand-curated ClusterServiceVersion. The curated CSV lives in bundle/manifests
+# and is the source of truth for install modes, permissions rationale, and the
+# oauth-proxy sidecar; this base only feeds operator-sdk the CRD/owned-API,
+# deployment, and RBAC it needs to (re)generate a consistent bundle.
+resources:
+  - ../default
+  - ../samples
+
+# [MANIFESTS] To enable webhooks, or other patches, add them here. Beacon has no
+# webhooks. The operator-sdk manifests plugin (see PROJECT) injects the CSV.
+# Scorecard is not wired in (no config/scorecard base and no bundle/tests); the
+# scorecard PROJECT plugin entry is scaffolding only.
+
+# OLM-only: add the oauth-proxy sidecar + TLS volumes + authenticated dashboard
+# flags on top of the manager-only base. See manager_olm_patch.yaml.
+patches:
+  - path: manager_olm_patch.yaml
+    target:
+      kind: Deployment
+      name: beacon-controller-manager

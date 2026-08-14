@@ -18,3 +18,7 @@ go.work.sum
 # Build artifacts
 cover.out
 dist/
+
+# Spurious empty CRD emitted by controller-gen/operator-sdk during bundle
+# generation (Beacon has no webhooks; the file has an empty group/kind).
+config/crd/bases/_.yaml
