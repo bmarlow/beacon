@@ -141,6 +141,28 @@ bundle: manifests kustomize ## Generate bundle manifests and metadata.
 	fi
 	operator-sdk bundle validate ./bundle
 
+# CRD source of truth is config/crd/bases; `make bundle` copies it into the
+# bundle, where operator-sdk adds boilerplate: a leading "---", a
+# "creationTimestamp: null" metadata line, and a trailing empty "status:" block.
+# This check diffs the two after stripping exactly that boilerplate, so genuine
+# schema drift fails CI while the cosmetic additions are ignored. Uses only
+# coreutils (sed/grep/diff) so it needs no Python/YAML deps in CI.
+CRD_SRC := config/crd/bases/beacon.io_gatewayhealthpolicies.yaml
+CRD_BUNDLE := bundle/manifests/beacon.io_gatewayhealthpolicies.yaml
+
+# Normalizer: drop a leading document marker, the creationTimestamp line, and
+# the operator-sdk trailing status stanza; collapse nothing else.
+define _crd_normalize
+sed -e '/^---$$/d' -e '/^  creationTimestamp: null$$/d' "$(1)" \
+  | sed -e '/^status:$$/,$$d'
+endef
+
+.PHONY: verify-bundle-crd
+verify-bundle-crd: ## Fail if the bundle CRD schema drifted from config/crd/bases.
+	@diff -u <($(call _crd_normalize,$(CRD_SRC))) <($(call _crd_normalize,$(CRD_BUNDLE))) \
+	  && echo "bundle CRD spec is in sync with config/crd/bases" \
+	  || { echo "ERROR: bundle CRD drifted from $(CRD_SRC). Run 'make bundle'."; exit 1; }
+
 .PHONY: stamp-openshift-versions
 stamp-openshift-versions: ## Re-add com.redhat.openshift.versions to bundle metadata.
 	@grep -q 'com.redhat.openshift.versions' bundle/metadata/annotations.yaml || { \
