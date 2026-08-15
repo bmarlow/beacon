@@ -54,13 +54,20 @@ is rendered with exactly one of these normalized states:
 | Level | States it can show |
 | --- | --- |
 | **Pod / backend leaf** | Healthy, Unhealthy, Exempt |
-| **Service** | Healthy, Unhealthy, Exempt, Unknown (also Degraded via worst-child folding of mixed pods → in practice Healthy/Unhealthy) |
-| **Route** | worst of its Services (Healthy / Unhealthy / Exempt / Unknown) |
+| **Service** | Healthy, Degraded, Unhealthy, Exempt, Unknown |
+| **Route** | worst of its Services (Healthy / Degraded / Unhealthy / Exempt / Unknown) |
 | **Gateway** | Healthy, Degraded, Unhealthy, Withdrawn, Pending, Exempt, Unknown |
 | **VIP / Pool** | worst of the Gateways under it, plus Withdrawn/Pending from advertisement |
 
-`Degraded`, `Withdrawn`, and `Pending` are **only produced at the Gateway/VIP/Pool
-levels** — never on a Pod, Service, or Route leaf.
+A **Service chip reflects the same threshold verdict used for the Gateway
+decision** (`minHealthyPodPercent`), *not* simply the worst individual pod: a
+Service that still meets its threshold but has some pods down is **Degraded**
+(up, but partially failing), so it will never show red while the Gateway above it
+stays up. This makes each level consistent with its parent.
+
+`Withdrawn` and `Pending` are **only produced at the Gateway/VIP/Pool levels** —
+never on a Pod, Service, or Route leaf. `Degraded` can appear on a Service, Route,
+Gateway, VIP, or Pool (but never on an individual Pod).
 
 **Worst-child folding.** A parent node inherits the worst state among its
 children, using this severity order (highest wins):
@@ -170,26 +177,32 @@ container.
 ## Matrix 2 — backend Service (from its pods)
 
 Assumes default `minHealthyPodPercent=1` and the Service has a selector.
-`P` = probed pods, `R` = Ready probed pods. Formula: healthy when
-`100*R/P >= 1` (i.e. **at least one** Ready probed pod).
+`P` = probed pods, `R` = Ready probed pods. The Service is **up** (meets the
+threshold) when `100*R/P >= 1` (i.e. **at least one** Ready probed pod). The chip
+is then **Healthy** if *all* probed pods are Ready, or **Degraded** if it's up but
+some pods are down; **Unhealthy** only when it drops below the threshold.
 
-| Probed pods (P) | Ready probed (R) | `100*R/P` | ≥ 1? | Service state | Counted? |
-| --- | --- | --- | --- | --- | --- |
-| 0 (no probed pods, has pods without probes) | — | — | — | **Exempt** | No |
-| 0 (selector, zero pods, policy=Unhealthy) | 0 | — | — | **Unhealthy** | Yes (scaled-to-zero) |
-| 1 | 1 | 100 | yes | **Healthy** | Yes |
-| 1 | 0 | 0 | no | **Unhealthy** | Yes |
-| 4 | 1 | 25 | yes | **Healthy** | Yes |
-| 4 | 0 | 0 | no | **Unhealthy** | Yes |
-| 10 | 1 | 10 | yes | **Healthy** | Yes |
+| Probed pods (P) | Ready probed (R) | `100*R/P` | ≥ 1? | Some pods down? | Service state | Counted? |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (no probed pods, has pods without probes) | — | — | — | — | **Exempt** | No |
+| 0 (selector, zero pods, policy=Unhealthy) | 0 | — | — | — | **Unhealthy** | Yes (scaled-to-zero) |
+| 1 | 1 | 100 | yes | no | **Healthy** | Yes |
+| 1 | 0 | 0 | no | yes | **Unhealthy** | Yes |
+| 3 | 2 | 66 | yes | yes | **Degraded** | Yes |
+| 4 | 1 | 25 | yes | yes | **Degraded** | Yes |
+| 4 | 4 | 100 | yes | no | **Healthy** | Yes |
+| 4 | 0 | 0 | no | yes | **Unhealthy** | Yes |
+| 10 | 1 | 10 | yes | yes | **Degraded** | Yes |
 
-> With the default `minHealthyPodPercent=1`, a Service is **Healthy as long as one
-> probed pod is Ready**, no matter how many others are failing. Raise
-> `minHealthyPodPercent` (policy, or `beacon.io/min-healthy-pod-percent` on the
-> Gateway/Service) to require more. Example at `100`: 3/4 Ready = 75 < 100 →
-> **Unhealthy**.
+> With the default `minHealthyPodPercent=1`, a Service stays **up** as long as one
+> probed pod is Ready. If some (but not all) of its pods are down it shows
+> **Degraded** (gold) rather than red — matching the fact that the Gateway above
+> it also stays up. It only goes **Unhealthy** (red) when it falls below the
+> threshold. Raise `minHealthyPodPercent` (policy, or
+> `beacon.io/min-healthy-pod-percent` on the Gateway/Service) to require more.
 
-Higher-threshold example (`minHealthyPodPercent=100`, all pods must be Ready):
+Higher-threshold example (`minHealthyPodPercent=100`, all pods must be Ready — so
+there is no "up but partial" band, hence no Degraded):
 
 | P | R | `100*R/P` | ≥ 100? | Service state |
 | --- | --- | --- | --- | --- |

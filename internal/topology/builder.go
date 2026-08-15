@@ -483,9 +483,25 @@ func (b *Builder) buildGatewayNode(
 				Healthy:  svcHealthy,
 				Critical: sn.Critical,
 			})
-			sn.Status = worstPodStatus(sn.Pods)
-			if svcScaledToZero {
+			// The Service chip reflects the SAME threshold verdict used for the
+			// Gateway decision (minHealthyPodPercent), not the worst individual
+			// pod — otherwise a Service that is "up" per the threshold (e.g. the
+			// default 1% = any Ready pod) would still show red while the Gateway
+			// correctly stays up. A counted Service that meets the threshold but
+			// has some pods down is Degraded (up, but partially failing); below
+			// the threshold it is Unhealthy.
+			switch {
+			case svcScaledToZero:
 				sn.Status = StatusUnhealthy
+			case !svcCounted:
+				// No probed pods (all probe-less / exempt) → not health-checked.
+				sn.Status = worstPodStatus(sn.Pods)
+			case !svcHealthy:
+				sn.Status = StatusUnhealthy
+			case svcUnhealthy > 0:
+				sn.Status = StatusDegraded
+			default:
+				sn.Status = StatusHealthy
 			}
 			// A Service's "time in status" is the most recent of its pods'
 			// status transitions (the last time its aggregate could have changed).

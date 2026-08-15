@@ -714,17 +714,33 @@ func TestBuild_PodPercentInteraction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if h := g.Pools[0].IPs[0].Gateways[0].Health; h != StatusHealthy {
-		t.Fatalf("default pod threshold: expected Healthy (1/3 ready), got %s", h)
+	gwn := g.Pools[0].IPs[0].Gateways[0]
+	if gwn.Health != StatusHealthy {
+		t.Fatalf("default pod threshold: expected Healthy (1/3 ready), got %s", gwn.Health)
+	}
+	// The Service and Route chips must agree with the Gateway: the Service is
+	// "up" per the threshold but has failing pods, so it is Degraded (not
+	// Unhealthy) — otherwise the tree would show red under a healthy Gateway.
+	svcn := gwn.Routes[0].Services[0]
+	if svcn.Status != StatusDegraded {
+		t.Fatalf("default pod threshold: expected Service Degraded (1/3 ready, up but partial), got %s", svcn.Status)
+	}
+	if rn := gwn.Routes[0].Status; rn != StatusDegraded {
+		t.Fatalf("default pod threshold: expected Route Degraded, got %s", rn)
 	}
 
-	// Require 100% pods ready: 1/3 fails -> service down -> Gateway Unhealthy.
+	// Require 100% pods ready: 1/3 fails -> service down -> Gateway Unhealthy,
+	// and the Service/Route chips are Unhealthy (below threshold).
 	hundred := int32(100)
 	g, err = mk(&hundred).Build(context.Background())
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if h := g.Pools[0].IPs[0].Gateways[0].Health; h != StatusUnhealthy {
-		t.Fatalf("100%% pod threshold: expected Unhealthy (1/3 ready), got %s", h)
+	gwn = g.Pools[0].IPs[0].Gateways[0]
+	if gwn.Health != StatusUnhealthy {
+		t.Fatalf("100%% pod threshold: expected Unhealthy (1/3 ready), got %s", gwn.Health)
+	}
+	if svcn := gwn.Routes[0].Services[0].Status; svcn != StatusUnhealthy {
+		t.Fatalf("100%% pod threshold: expected Service Unhealthy (below threshold), got %s", svcn)
 	}
 }
