@@ -704,6 +704,11 @@ Beacon serves a built-in web dashboard that renders the full relationship chain
 **from the MetalLB IP all the way down to the app/service pod**, with live status
 at every level:
 
+> For a deep dive into how the dashboard is built, served, rendered, cached,
+> and authenticated — with diagrams — see
+> [`docs/DASHBOARD.md`](docs/DASHBOARD.md). For the full semantics of every
+> status color and how it rolls up, see [`docs/HEALTH.md`](docs/HEALTH.md).
+
 ```
 IPAddressPool (MetalLB)          [name, CIDRs; time-in-status]
   └─ VIP  (Advertised / Withdrawn / Pending; time-in-status)
@@ -718,6 +723,13 @@ Highlights:
 
 - Each node is **color-coded** (Healthy / Degraded / Unhealthy / Withdrawn /
   Pending / Exempt / Unknown); the tree is collapsible and auto-refreshes.
+- The status legend doubles as a **click-to-filter control**: click one or more
+  status chips (e.g. `Unhealthy` + `Degraded`) to instantly narrow the tree to
+  only pools/VIPs/gateways/routes/services/pods matching those statuses (and
+  their ancestors, so you can still see which Gateway/Service a match belongs
+  to). Each chip shows a live count; click an active chip again, or **Clear
+  filter**, to reset. The filter is applied entirely client-side and persists
+  across auto-refreshes.
 - Every component name is a **clickable link to its OpenShift console page**
   (opens in a new tab) when you have access to that object.
 - Each node shows **how long it has been in its current status** (e.g. `for
