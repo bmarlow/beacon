@@ -57,10 +57,10 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/health"
-	"github.com/bmarlow/beacon/internal/policy"
-	"github.com/bmarlow/beacon/internal/skupper"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/health"
+	"github.com/beacon-operator/beacon/internal/policy"
+	"github.com/beacon-operator/beacon/internal/skupper"
 )
 
 // GatewayResolution is the outcome of tracing a Gateway.

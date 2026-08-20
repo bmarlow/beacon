@@ -23,7 +23,7 @@ COPY internal/ internal/
 # Build a static binary. CGO disabled for a minimal, distroless-compatible image.
 # The version is stamped into internal/version.Version.
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -ldflags="-s -w -X github.com/bmarlow/beacon/internal/version.Version=${VERSION}" \
+    go build -a -ldflags="-s -w -X github.com/beacon-operator/beacon/internal/version.Version=${VERSION}" \
     -o manager cmd/main.go
 
 # Use Red Hat's UBI micro base for a minimal, supportable runtime image.
@@ -35,7 +35,7 @@ USER 65532:65532
 
 LABEL org.opencontainers.image.title="beacon" \
       org.opencontainers.image.description="OpenShift operator integrating Gateway API health with MetalLB BGP advertisements" \
-      org.opencontainers.image.source="https://github.com/bmarlow/beacon" \
+      org.opencontainers.image.source="https://github.com/beacon-operator/beacon" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENTRYPOINT ["/manager"]

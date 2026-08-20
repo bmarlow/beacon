@@ -19,8 +19,8 @@ package export
 import (
 	"time"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/version"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/version"
 )
 
 // Build converts a GatewayHealthPolicy's already-computed status into a

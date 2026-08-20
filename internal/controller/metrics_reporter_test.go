@@ -27,9 +27,9 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/metrics"
-	"github.com/bmarlow/beacon/internal/version"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/metrics"
+	"github.com/beacon-operator/beacon/internal/version"
 )
 
 func reporterScheme(t *testing.T) *runtime.Scheme {

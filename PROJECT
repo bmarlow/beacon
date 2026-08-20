@@ -9,7 +9,7 @@ plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
 projectName: beacon
-repo: github.com/bmarlow/beacon
+repo: github.com/beacon-operator/beacon
 resources:
 - api:
     crdVersion: v1
@@ -18,6 +18,6 @@ resources:
   domain: beacon.io
   group: beacon
   kind: GatewayHealthPolicy
-  path: github.com/bmarlow/beacon/api/v1alpha1
+  path: github.com/beacon-operator/beacon/api/v1alpha1
   version: v1alpha1
 version: "3"

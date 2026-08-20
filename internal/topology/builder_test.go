@@ -34,10 +34,10 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/metallb"
-	"github.com/bmarlow/beacon/internal/skupper"
-	"github.com/bmarlow/beacon/internal/state"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/metallb"
+	"github.com/beacon-operator/beacon/internal/skupper"
+	"github.com/beacon-operator/beacon/internal/state"
 )
 
 func scheme(t *testing.T) *runtime.Scheme {

@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 // Package version exposes the operator build version. Version is injected at
-// build time via -ldflags "-X github.com/bmarlow/beacon/internal/version.Version=<v>"
+// build time via -ldflags "-X github.com/beacon-operator/beacon/internal/version.Version=<v>"
 // (see the Dockerfile / CI). When unset it falls back to the Go build info main
 // module version, then to "dev".
 package version

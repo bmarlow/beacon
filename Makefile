@@ -1,7 +1,7 @@
 # Image URL to use all building/pushing image targets
-IMG ?= ghcr.io/bmarlow/beacon:latest
+IMG ?= ghcr.io/beacon-operator/beacon:latest
 # Bundle image
-BUNDLE_IMG ?= ghcr.io/bmarlow/beacon-bundle:latest
+BUNDLE_IMG ?= ghcr.io/beacon-operator/beacon-bundle:latest
 VERSION ?= 0.1.24
 
 # OLM channel configuration (baked into the bundle metadata).
@@ -110,7 +110,7 @@ uninstall: manifests kustomize ## Uninstall CRDs from the cluster.
 
 .PHONY: deploy
 deploy: manifests kustomize ## Deploy controller to the cluster.
-	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/bmarlow/beacon=${IMG}
+	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/beacon-operator/beacon=${IMG}
 	$(KUSTOMIZE) build config/default | kubectl apply -f -
 
 .PHONY: undeploy
@@ -127,7 +127,7 @@ undeploy: ## Undeploy controller from the cluster.
 .PHONY: bundle
 bundle: manifests kustomize ## Generate bundle manifests and metadata.
 	operator-sdk generate kustomize manifests -q
-	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/bmarlow/beacon=${IMG}
+	cd config/manager && $(KUSTOMIZE) edit set image ghcr.io/beacon-operator/beacon=${IMG}
 	$(KUSTOMIZE) build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION) $(BUNDLE_METADATA_OPTS)
 	# operator-sdk drops the OpenShift version-compatibility annotation on every
 	# regenerate; re-stamp it into the bundle metadata and Dockerfile.

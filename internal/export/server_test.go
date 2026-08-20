@@ -33,7 +33,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
 )
 
 func TestBearerToken(t *testing.T) {

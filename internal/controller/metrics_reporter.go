@@ -27,10 +27,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/identity"
-	"github.com/bmarlow/beacon/internal/metrics"
-	"github.com/bmarlow/beacon/internal/version"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/identity"
+	"github.com/beacon-operator/beacon/internal/metrics"
+	"github.com/beacon-operator/beacon/internal/version"
 )
 
 // defaultMetricsRefreshInterval is how often MetricsReporter republishes gauge

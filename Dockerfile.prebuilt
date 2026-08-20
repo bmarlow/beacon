@@ -13,7 +13,7 @@ USER 65532:65532
 
 LABEL org.opencontainers.image.title="beacon" \
       org.opencontainers.image.description="OpenShift operator integrating Gateway API health with MetalLB BGP advertisements" \
-      org.opencontainers.image.source="https://github.com/bmarlow/beacon" \
+      org.opencontainers.image.source="https://github.com/beacon-operator/beacon" \
       org.opencontainers.image.licenses="Apache-2.0"
 
 ENTRYPOINT ["/manager"]

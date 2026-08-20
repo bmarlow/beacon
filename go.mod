@@ -1,8 +1,9 @@
-module github.com/bmarlow/beacon
+module github.com/beacon-operator/beacon
 
 go 1.22.0
 
 require (
+	github.com/go-logr/logr v1.4.2
 	github.com/prometheus/client_golang v1.19.1
 	k8s.io/api v0.30.3
 	k8s.io/apimachinery v0.30.3
@@ -19,7 +20,6 @@ require (
 	github.com/evanphx/json-patch v5.7.0+incompatible // indirect
 	github.com/evanphx/json-patch/v5 v5.9.0 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
-	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/zapr v1.3.0 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/jsonreference v0.21.0 // indirect

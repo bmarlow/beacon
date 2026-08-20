@@ -23,7 +23,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
 )
 
 func TestBuild(t *testing.T) {

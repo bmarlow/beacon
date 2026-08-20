@@ -30,7 +30,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
 )
 
 func newScheme(t *testing.T) *runtime.Scheme {

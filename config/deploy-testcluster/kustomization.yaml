@@ -15,8 +15,8 @@ resources:
   - ../manager
 
 images:
-  - name: ghcr.io/bmarlow/beacon
-    newName: ghcr.io/bmarlow/beacon
+  - name: ghcr.io/beacon-operator/beacon
+    newName: ghcr.io/beacon-operator/beacon
     newTag: "latest"
 
 # Ensure the Namespace object itself is named "beacon" (the base manager.yaml

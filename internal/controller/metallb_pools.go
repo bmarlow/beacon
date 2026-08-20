@@ -17,7 +17,7 @@ limitations under the License.
 package controller
 
 import (
-	"github.com/bmarlow/beacon/internal/metallb"
+	"github.com/beacon-operator/beacon/internal/metallb"
 )
 
 // metallbPoolList is a small adapter wrapping metallb.IPAddressPoolList so the

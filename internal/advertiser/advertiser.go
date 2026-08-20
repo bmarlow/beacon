@@ -60,7 +60,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
 )
 
 const (

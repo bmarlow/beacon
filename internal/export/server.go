@@ -36,7 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
 )
 
 // summaryPath is the export endpoint's URL path. It is also the

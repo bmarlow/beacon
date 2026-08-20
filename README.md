@@ -426,9 +426,9 @@ The operator image is built and published automatically by GitHub Actions
 tags) to **GitHub Container Registry**:
 
 ```
-ghcr.io/bmarlow/beacon:latest        # rolling latest from main
-ghcr.io/bmarlow/beacon:sha-<short>   # immutable, per-commit (recommended for rollouts)
-ghcr.io/bmarlow/beacon:X.Y.Z         # published when a vX.Y.Z git tag is pushed
+ghcr.io/beacon-operator/beacon:latest        # rolling latest from main
+ghcr.io/beacon-operator/beacon:sha-<short>   # immutable, per-commit (recommended for rollouts)
+ghcr.io/beacon-operator/beacon:X.Y.Z         # published when a vX.Y.Z git tag is pushed
 ```
 
 Pull requests build the image (to catch breakage) but do not push. For
@@ -474,7 +474,7 @@ pulled with the cluster's Red Hat entitlement, present on OpenShift by default.
 For **disconnected / air-gapped** fleets, mirror both images to your internal
 registry and remap them:
 
-- **Operator image** (`ghcr.io/bmarlow/beacon`) and **oauth-proxy image** —
+- **Operator image** (`ghcr.io/beacon-operator/beacon`) and **oauth-proxy image** —
   mirror with `oc adm catalog mirror` / `oc image mirror`, then apply an
   `ImageDigestMirrorSet` (or `ImageTagMirrorSet`) so nodes pull from the mirror.
 - Alternatively, override the operator image per-cluster via the `Subscription`'s
