@@ -44,13 +44,15 @@
 
   <div class="legend" id="legend">
     <span class="legend-label">Status</span>
-    <span class="chip s-Healthy">Healthy</span>
-    <span class="chip s-Degraded">Degraded</span>
-    <span class="chip s-Unhealthy">Unhealthy</span>
-    <span class="chip s-Withdrawn">Withdrawn</span>
-    <span class="chip s-Pending">Pending</span>
-    <span class="chip s-Exempt">Exempt</span>
-    <span class="chip s-Unknown">Unknown</span>
+    <button type="button" class="chip s-Healthy" data-status="Healthy" data-label="Healthy" aria-pressed="false" title="Click to show only Healthy items">Healthy</button>
+    <button type="button" class="chip s-Degraded" data-status="Degraded" data-label="Degraded" aria-pressed="false" title="Click to show only Degraded items">Degraded</button>
+    <button type="button" class="chip s-Unhealthy" data-status="Unhealthy" data-label="Unhealthy" aria-pressed="false" title="Click to show only Unhealthy items">Unhealthy</button>
+    <button type="button" class="chip s-Withdrawn" data-status="Withdrawn" data-label="Withdrawn" aria-pressed="false" title="Click to show only Withdrawn items">Withdrawn</button>
+    <button type="button" class="chip s-Pending" data-status="Pending" data-label="Pending" aria-pressed="false" title="Click to show only Pending items">Pending</button>
+    <button type="button" class="chip s-Exempt" data-status="Exempt" data-label="Exempt" aria-pressed="false" title="Click to show only Exempt items">Exempt</button>
+    <button type="button" class="chip s-Unknown" data-status="Unknown" data-label="Unknown" aria-pressed="false" title="Click to show only Unknown items">Unknown</button>
+    <span id="filterInfo" class="filter-info"></span>
+    <button type="button" id="clearFilterBtn" class="rh-btn rh-btn--link chip-clear" style="display: none">Clear filter</button>
   </div>
 
   <main id="tree" class="tree">
