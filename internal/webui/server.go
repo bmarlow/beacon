@@ -34,9 +34,53 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
-	"github.com/bmarlow/beacon/internal/state"
-	"github.com/bmarlow/beacon/internal/topology"
+	"github.com/beacon-operator/beacon/internal/rcache"
+	"github.com/beacon-operator/beacon/internal/state"
+	"github.com/beacon-operator/beacon/internal/topology"
 )
+
+// topologyCacheTTL bounds how long the dashboard's topology.Builder reuses a
+// live Pod/Service/Deployment/EndpointSlice read across requests. The
+// dashboard rebuilds the full graph from scratch on every request (including
+// every auto-refresh poll, per open browser tab); without this, an unchanged
+// cluster still pays the full live-read cost every single poll.
+//
+// This must be comfortably longer than the actual gap between polls, or it
+// buys nothing: the client schedules its next poll 5s AFTER the previous one
+// *finishes* (see app.js's scheduleAuto), so the true gap is 5s + however
+// long the last build took — if the TTL is shorter than that gap, every
+// "auto-refresh" ends up being a full cache-cold rebuild anyway. 10s covers
+// that gap with room to spare, so steady-state auto-refresh polls hit a warm
+// cache (fast) while a real change still surfaces within one or two polls —
+// well within the existing withdraw/readvertise dampening timers' own
+// multi-second timescales, which this cache doesn't affect at all (those are
+// driven by the reconciler's own, separate, uncached reads).
+const topologyCacheTTL = 10 * time.Second
+
+// maxConcurrentBuilds bounds how many topology.Builder.Build() calls (each
+// itself fanning out to gatewayBuildConcurrency concurrent per-Gateway
+// live API calls) may run at once across ALL requests to this dashboard
+// instance — every open browser tab (auto-refreshing every 5s), every
+// manual refresh click, and every concurrent user. Without this, a burst of
+// concurrent requests (e.g. several tabs, or a client re-requesting before a
+// slow response returns) each start their own full-graph rebuild; those
+// rebuilds compete for the same rate-limited API client and get slower,
+// which invites still more overlapping requests — the same thundering-herd
+// pileup that a single tab's auto-refresh loop is separately guarded
+// against client-side (see app.js's refreshInFlight). This is the
+// server-side backstop for every OTHER way overlapping requests can occur.
+const maxConcurrentBuilds = 2
+
+// authzCacheTTL bounds how long a SubjectAccessReview result is reused across
+// requests (see AccessChecker's doc comment for why this exists — the same
+// motivation as topologyCacheTTL, but for the per-object authorization check
+// rather than the object data itself). RBAC changes far less frequently than
+// pod/service health, so this is intentionally longer than topologyCacheTTL;
+// the trade-off is that a just-revoked permission can remain visible in the
+// dashboard for up to this long (the underlying Kubernetes API itself is
+// unaffected — this only controls what Beacon's own dashboard chooses to
+// display).
+const authzCacheTTL = 20 * time.Second
 
 //go:embed static/*
 var staticFS embed.FS
@@ -52,11 +96,29 @@ type Server struct {
 	// SubjectAccessReviews using the forwarded user identity. When false, the
 	// dashboard is unauthenticated and shows everything (local/dev mode).
 	RequireAuth bool
+	// cache short-circuits repeated live Pod/Service/Deployment/EndpointSlice
+	// reads across topology builds; see topologyCacheTTL.
+	cache *rcache.Cache
+	// authzCache short-circuits repeated SubjectAccessReview checks across
+	// requests; see authzCacheTTL. Separate from cache because it needs a
+	// different (longer) TTL.
+	authzCache *rcache.Cache
+	// buildSem bounds concurrent topology builds; see maxConcurrentBuilds.
+	buildSem chan struct{}
 }
 
 // NewServer constructs a Server.
 func NewServer(addr string, c client.Client, states *state.Store, policyName string, requireAuth bool) *Server {
-	return &Server{Addr: addr, Client: c, States: states, PolicyName: policyName, RequireAuth: requireAuth}
+	return &Server{
+		Addr:        addr,
+		Client:      c,
+		States:      states,
+		PolicyName:  policyName,
+		RequireAuth: requireAuth,
+		cache:       rcache.New(topologyCacheTTL),
+		authzCache:  rcache.New(authzCacheTTL),
+		buildSem:    make(chan struct{}, maxConcurrentBuilds),
+	}
 }
 
 // Start implements manager.Runnable so the manager owns the HTTP server
@@ -109,6 +171,7 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 		Client:     s.Client,
 		States:     s.States,
 		PolicyName: s.PolicyName,
+		Cache:      s.cache,
 	}
 
 	// When auth is required, derive the user from the oauth-proxy forwarded
@@ -121,7 +184,17 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		authedUser = user.Name
-		builder.Authz = NewAccessChecker(s.Client, user)
+		builder.Authz = NewAccessChecker(s.Client, user, s.authzCache)
+	}
+
+	// Wait for a build slot, but don't wait past the request's own deadline —
+	// see maxConcurrentBuilds.
+	select {
+	case s.buildSem <- struct{}{}:
+		defer func() { <-s.buildSem }()
+	case <-ctx.Done():
+		http.Error(w, "timed out waiting for an available topology-build slot", http.StatusServiceUnavailable)
+		return
 	}
 
 	graph, err := builder.Build(ctx)

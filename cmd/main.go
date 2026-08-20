@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -37,15 +38,15 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/controller"
-	"github.com/bmarlow/beacon/internal/export"
-	"github.com/bmarlow/beacon/internal/metallb"
-	"github.com/bmarlow/beacon/internal/metrics"
-	"github.com/bmarlow/beacon/internal/monitoring"
-	"github.com/bmarlow/beacon/internal/podnamespace"
-	"github.com/bmarlow/beacon/internal/state"
-	"github.com/bmarlow/beacon/internal/webui"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/controller"
+	"github.com/beacon-operator/beacon/internal/export"
+	"github.com/beacon-operator/beacon/internal/metallb"
+	"github.com/beacon-operator/beacon/internal/metrics"
+	"github.com/beacon-operator/beacon/internal/monitoring"
+	"github.com/beacon-operator/beacon/internal/podnamespace"
+	"github.com/beacon-operator/beacon/internal/state"
+	"github.com/beacon-operator/beacon/internal/webui"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -149,10 +150,59 @@ func main() {
 			"error", err.Error())
 	}
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	// Pods, Services, and Deployments are read cluster-wide (Beacon's backend
+	// workloads can live in any namespace, behind any Service), but Beacon only
+	// ever touches a handful of them per reconcile — the specific backends of
+	// whichever Gateway is currently being traced (see internal/trace and
+	// internal/advertiser), always via a narrow, indexed Get/List (by name, or
+	// by namespace+label). By default the manager's client serves ALL reads
+	// through its cache, which means the FIRST Get/List of a type causes
+	// controller-runtime to open a informer that lists and watches, and then
+	// holds in memory, every object of that type in the entire cluster —
+	// including the 99% Beacon never looks at. On a large or busy shared
+	// cluster (many Pods/Deployments/Services unrelated to any Gateway) that
+	// full-object, cluster-wide cache is what actually exhausts the
+	// container's memory limit, not Beacon's own working set. Excluding these
+	// three types from the cache makes every read for them a direct,
+	// live API call instead — bounded by what a reconcile actually needs
+	// (O(gateways × their backends)), not by total cluster size. The
+	// trade-off is a small amount of extra API server load per reconcile in
+	// exchange for memory that no longer scales with unrelated cluster
+	// growth. See SetupWithManager's doc comment for the watch-side half of
+	// this (EndpointSlices remain cache-backed as the reactive trigger;
+	// Pods/Services/Deployments are no longer watched directly).
+	clientCacheOpts := &client.CacheOptions{
+		DisableFor: []client.Object{
+			&corev1.Pod{},
+			&corev1.Service{},
+			&appsv1.Deployment{},
+		},
+	}
+
+	// client-go defaults the REST client to a conservative 5 QPS / 10 burst
+	// (k8s.io/client-go/rest.DefaultQPS/DefaultBurst) — fine for a controller
+	// that only ever touches a handful of objects per reconcile, but far too
+	// low now that Pod/Service/Deployment reads are live/uncached (see
+	// Client.Cache.DisableFor below) and the dashboard rebuilds its full graph
+	// (every Gateway's backends) from scratch on every request. With many
+	// Gateways, that default rate limit — not network latency, not the lack
+	// of a cache — is what makes both reconciliation and the dashboard fall
+	// far behind: every goroutine/reconcile ends up queued behind the same
+	// process-wide 5-requests-per-second ceiling regardless of how much
+	// concurrency the caller uses. Raise it to something proportionate to a
+	// cluster with hundreds of managed Gateways; the API server's own
+	// APF (Priority & Fairness) still protects it from any single client.
+	restCfg := ctrl.GetConfigOrDie()
+	restCfg.QPS = 100
+	restCfg.Burst = 200
+
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme:  runtimeScheme,
 		Metrics: metricsOpts,
 		Cache:   cacheOpts,
+		Client: client.Options{
+			Cache: clientCacheOpts,
+		},
 		WebhookServer: webhook.NewServer(webhook.Options{
 			TLSOpts: []func(*tls.Config){disableHTTP2},
 		}),

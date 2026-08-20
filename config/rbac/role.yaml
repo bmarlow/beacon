@@ -15,11 +15,17 @@ rules:
   - ""
   resources:
   - namespaces
-  - pods
   verbs:
   - get
   - list
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - get
+  - list
 - apiGroups:
   - ""
   resources:
@@ -29,7 +35,6 @@ rules:
   - get
   - list
   - update
-  - watch
 - apiGroups:
   - apps
   resources:
@@ -38,7 +43,6 @@ rules:
   - get
   - list
   - patch
-  - watch
 - apiGroups:
   - authentication.k8s.io
   resources:

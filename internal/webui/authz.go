@@ -20,11 +20,12 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	authzv1 "k8s.io/api/authorization/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/beacon-operator/beacon/internal/rcache"
 )
 
 // userFromRequest extracts the authenticated identity from the headers set by
@@ -52,18 +53,26 @@ func userFromRequest(r *http.Request) (userInfo, bool) {
 
 // AccessChecker answers "can user U perform verb V on resource R?" by issuing
 // SubjectAccessReviews against the API server (as the operator's ServiceAccount,
-// which is granted create on subjectaccessreviews). It caches results per
-// request-scoped user for the lifetime of a single graph build.
+// which is granted create on subjectaccessreviews).
 //
 // Because SARs are evaluated by the API server using the same RBAC the API uses,
 // a cluster-admin passes every check (sees everything), and ordinary users only
 // pass for resources they can actually read.
+//
+// Results are cached across requests (not just within a single graph build):
+// the dashboard re-checks the SAME Gateways/Routes/Services/Pods on every poll
+// (every few seconds, per open tab), and with hundreds of Gateways that's
+// potentially thousands of live SAR round-trips per poll if not cached — this
+// was a second, independent source of dashboard latency beyond the
+// Pod/Service/Deployment data reads (see topology.Builder's Cache field and
+// its doc comment). RBAC bindings change far less often than pod health, so a
+// modest TTL (authzCacheTTL) is a safe trade-off; see its doc comment for the
+// one caveat (a revoked permission can remain visible in the dashboard for up
+// to that TTL).
 type AccessChecker struct {
 	client client.Client
 	user   userInfo
-
-	mu    sync.Mutex
-	cache map[string]bool
+	cache  *rcache.Cache
 }
 
 // userInfo is the authenticated identity extracted from the oauth-proxy headers.
@@ -76,9 +85,12 @@ type userInfo struct {
 	Admin bool
 }
 
-// NewAccessChecker builds a checker for a specific user.
-func NewAccessChecker(c client.Client, user userInfo) *AccessChecker {
-	return &AccessChecker{client: c, user: user, cache: map[string]bool{}}
+// NewAccessChecker builds a checker for a specific user, backed by a shared,
+// cross-request cache (see AccessChecker's doc comment). Passing a nil cache
+// disables the cross-request cache (every check is a live SAR) — safe for
+// tests and callers that don't want it.
+func NewAccessChecker(c client.Client, user userInfo, cache *rcache.Cache) *AccessChecker {
+	return &AccessChecker{client: c, user: user, cache: cache}
 }
 
 // Allowed reports whether the user may perform verb on the given resource.
@@ -90,13 +102,11 @@ func (a *AccessChecker) Allowed(ctx context.Context, verb, group, resource, name
 	if a.user.Admin {
 		return true
 	}
-	key := verb + "|" + group + "|" + resource + "|" + namespace + "|" + name
-	a.mu.Lock()
-	if v, ok := a.cache[key]; ok {
-		a.mu.Unlock()
-		return v
+	key := "sar/" + a.user.Name + "|" + verb + "|" + group + "|" + resource + "|" + namespace + "|" + name
+	if v, ok := a.cache.Get(key); ok {
+		allowed, _ := v.(bool)
+		return allowed
 	}
-	a.mu.Unlock()
 
 	sar := &authzv1.SubjectAccessReview{
 		Spec: authzv1.SubjectAccessReviewSpec{
@@ -118,8 +128,6 @@ func (a *AccessChecker) Allowed(ctx context.Context, verb, group, resource, name
 		allowed = sar.Status.Allowed
 	}
 
-	a.mu.Lock()
-	a.cache[key] = allowed
-	a.mu.Unlock()
+	a.cache.Set(key, allowed)
 	return allowed
 }

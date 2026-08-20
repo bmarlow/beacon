@@ -23,7 +23,6 @@ import (
 	"sync"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,15 +37,15 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/advertiser"
-	"github.com/bmarlow/beacon/internal/health"
-	"github.com/bmarlow/beacon/internal/identity"
-	"github.com/bmarlow/beacon/internal/metrics"
-	"github.com/bmarlow/beacon/internal/policy"
-	"github.com/bmarlow/beacon/internal/state"
-	"github.com/bmarlow/beacon/internal/trace"
-	"github.com/bmarlow/beacon/internal/version"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/advertiser"
+	"github.com/beacon-operator/beacon/internal/health"
+	"github.com/beacon-operator/beacon/internal/identity"
+	"github.com/beacon-operator/beacon/internal/metrics"
+	"github.com/beacon-operator/beacon/internal/policy"
+	"github.com/beacon-operator/beacon/internal/state"
+	"github.com/beacon-operator/beacon/internal/trace"
+	"github.com/beacon-operator/beacon/internal/version"
 )
 
 // GatewayReconciler reconciles Gateway API Gateways against MetalLB
@@ -91,15 +90,18 @@ type gwState struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // Routes attached to Gateways: read + watch to react to attachment changes.
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes;grpcroutes;tcproutes;tlsroutes,verbs=get;list;watch
-// Services: read/watch backends; create+update the operator-owned metrics and
-// dashboard Services (never patch/delete).
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
+// Services: read backends (live, uncached — see cmd/main.go's
+// Client.Cache.DisableFor); create+update the operator-owned metrics and
+// dashboard Services (never patch/delete). No "watch" verb: Services are
+// deliberately not cached/watched (see SetupWithManager's doc comment).
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;create;update
+// Pods: read backends (live, uncached, for the same reason). No "watch".
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
 // +kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=get;list;watch
-// Deployments: read/watch all; the only write is a MergeFrom patch of the proxy
-// Deployment's replicas/annotations (withdraw/advertise). No update/delete, and
-// the scale subresource is not used.
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;patch
+// Deployments: read all (live, uncached); the only write is a MergeFrom patch
+// of the proxy Deployment's replicas/annotations (withdraw/advertise). No
+// update/delete, no scale subresource, and no "watch" (see above).
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // IPAddressPools: read-only; list/watch are required because reads go through
 // the controller-runtime cache (informer-backed).
@@ -482,6 +484,24 @@ func (r *GatewayReconciler) event(gw *gwapiv1.Gateway, eventType, reason, msg st
 // re-enqueuing all Gateways on any relevant backend change. Each Gateway
 // reconcile then re-traces precisely and cheaply; the resync interval bounds
 // worst-case latency.
+//
+// Deliberately NOT watched here: Pods, Services, and Deployments. A .Watches()
+// registration makes controller-runtime open a cluster-wide list+watch informer
+// that caches every object of that type FOREVER, in full, regardless of
+// whether Beacon cares about it — on a large or shared cluster that is by far
+// the biggest driver of the operator's memory footprint, and it grows with
+// total cluster size, not with the number of Gateways Beacon actually manages.
+// EndpointSlices are watched instead: they already carry per-endpoint
+// readiness (kept in sync with backend Pod readiness by the endpointslice
+// controller on essentially the same timeline pod-watching would give us), and
+// there are normally an order of magnitude fewer, much smaller EndpointSlice
+// objects than Pods. Pod/Service/Deployment data is instead read live
+// (uncached; see cmd/main.go's Client.Cache.DisableFor) on demand, narrowly
+// scoped by namespace+label to the specific Gateway being reconciled (see
+// internal/trace and internal/advertiser) — bounded by what Beacon manages,
+// not by total cluster size. Any change these types could still cause that an
+// EndpointSlice update wouldn't (e.g. a Service's selector or type changing) is
+// picked up within one resync interval, same as today.
 func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.state == nil {
 		r.state = map[types.NamespacedName]*gwState{}
@@ -490,12 +510,10 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	bldr := ctrl.NewControllerManagedBy(mgr).
 		For(&gwapiv1.Gateway{}).
-		// Backend workload signals (any namespace).
-		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.mapToAllGateways)).
+		// Backend workload readiness signal (any namespace); see the
+		// doc comment above for why Pods/Services/Deployments aren't watched
+		// directly.
 		Watches(&discoveryv1.EndpointSlice{}, handler.EnqueueRequestsFromMapFunc(r.mapToAllGateways)).
-		Watches(&corev1.Service{}, handler.EnqueueRequestsFromMapFunc(r.mapToAllGateways)).
-		// Proxy Deployment scale changes (Beacon's withdrawal target).
-		Watches(&appsv1.Deployment{}, handler.EnqueueRequestsFromMapFunc(r.mapToAllGateways)).
 		// Route attachment changes (which backends a Gateway fronts). HTTPRoute
 		// and GRPCRoute are part of the standard Gateway API channel; TCPRoute
 		// and TLSRoute are experimental and often absent, so their watches are

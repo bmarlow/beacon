@@ -22,6 +22,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -36,16 +37,30 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	gwapiv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 
-	beaconv1alpha1 "github.com/bmarlow/beacon/api/v1alpha1"
-	"github.com/bmarlow/beacon/internal/health"
-	"github.com/bmarlow/beacon/internal/metallb"
-	"github.com/bmarlow/beacon/internal/policy"
-	"github.com/bmarlow/beacon/internal/skupper"
-	"github.com/bmarlow/beacon/internal/state"
-	"github.com/bmarlow/beacon/internal/version"
+	beaconv1alpha1 "github.com/beacon-operator/beacon/api/v1alpha1"
+	"github.com/beacon-operator/beacon/internal/health"
+	"github.com/beacon-operator/beacon/internal/metallb"
+	"github.com/beacon-operator/beacon/internal/policy"
+	"github.com/beacon-operator/beacon/internal/rcache"
+	"github.com/beacon-operator/beacon/internal/skupper"
+	"github.com/beacon-operator/beacon/internal/state"
+	"github.com/beacon-operator/beacon/internal/version"
 )
 
 const gatewayServiceLabel = "gateway.networking.k8s.io/gateway-name"
+
+// gatewayBuildConcurrency bounds how many Gateways' backend trees (Routes ->
+// Services -> EndpointSlices -> Pods) are resolved in parallel per Build().
+// Pod/Service/Deployment reads are live/uncached against the API server (see
+// cmd/main.go's Client.Cache.DisableFor — a deliberate trade-off to keep
+// memory bounded on large clusters, see SetupWithManager's doc comment in
+// internal/controller/gateway_controller.go). On a cluster with many
+// Gateways, resolving them one at a time made a single dashboard load take
+// tens of seconds (each Gateway needs several sequential live API calls).
+// Bounded parallelism keeps total wall-clock time close to that of a single
+// Gateway instead of the sum of all of them, without opening unbounded
+// concurrent requests against the API server.
+const gatewayBuildConcurrency = 20
 
 // Authorizer decides whether the requesting user may read a given resource.
 // Implemented by webui.AccessChecker (SubjectAccessReview-backed). When nil,
@@ -66,6 +81,13 @@ type Builder struct {
 	// Authz, when set, filters the graph to only the resources the requesting
 	// user can read. Nil means no filtering (unauthenticated/local mode).
 	Authz Authorizer
+	// Cache, when set, short-circuits the repeated live Pod/Service/Deployment/
+	// EndpointSlice reads that would otherwise happen on every dashboard poll
+	// (the dashboard rebuilds the full graph from scratch on every request; by
+	// default those types are uncached against the API server — see
+	// cmd/main.go). A nil Cache simply disables this de-duplication (every
+	// read goes live), which is safe for tests and callers that don't set one.
+	Cache *rcache.Cache
 }
 
 // canRead is a nil-safe helper that returns true when no authorizer is set.
@@ -139,20 +161,44 @@ func (b *Builder) Build(ctx context.Context) (*Graph, error) {
 	// Build a GatewayNode for each Gateway. Prefer the policy's shared status
 	// (written by the leader) so every replica renders identical timer/advert
 	// state; fall back to the local in-memory store if status is empty.
-	var gatewayNodes []GatewayNode
 	snaps := snapshotsFromPolicyStatus(pol)
 	if len(snaps) == 0 && b.States != nil {
 		snaps = b.States.Snapshot()
 	}
 
+	// Resolve each Gateway's backend tree with bounded parallelism — see
+	// gatewayBuildConcurrency's doc comment for why this matters. Results are
+	// written into a slice pre-sized to gwList.Items so ordering stays
+	// identical to a sequential loop; canRead/buildGatewayNode only read
+	// shared state here (routesByGateway, snaps), so this is race-free.
+	type gwResult struct {
+		node GatewayNode
+		ok   bool
+	}
+	results := make([]gwResult, len(gwList.Items))
+	sem := make(chan struct{}, gatewayBuildConcurrency)
+	var wg sync.WaitGroup
 	for i := range gwList.Items {
 		gw := &gwList.Items[i]
-		// Hide Gateways the requesting user cannot read.
-		if !b.canRead(ctx, "get", "gateway.networking.k8s.io", "gateways", gw.Namespace, gw.Name) {
-			continue
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, gw *gwapiv1.Gateway) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// Hide Gateways the requesting user cannot read.
+			if !b.canRead(ctx, "get", "gateway.networking.k8s.io", "gateways", gw.Namespace, gw.Name) {
+				return
+			}
+			results[i] = gwResult{node: b.buildGatewayNode(ctx, gw, spec, routesByGateway, snaps), ok: true}
+		}(i, gw)
+	}
+	wg.Wait()
+
+	var gatewayNodes []GatewayNode
+	for i := range results {
+		if results[i].ok {
+			gatewayNodes = append(gatewayNodes, results[i].node)
 		}
-		node := b.buildGatewayNode(ctx, gw, spec, routesByGateway, snaps)
-		gatewayNodes = append(gatewayNodes, node)
 	}
 
 	// Group Gateways under the pool that owns their IP.
@@ -385,8 +431,8 @@ func (b *Builder) buildGatewayNode(
 			if !b.canRead(ctx, "get", "", "services", bref.Namespace, bref.Name) {
 				continue
 			}
-			svc := &corev1.Service{}
-			if err := b.Client.Get(ctx, bref, svc); err != nil {
+			svc := b.getService(ctx, bref)
+			if svc == nil {
 				continue
 			}
 			sn := ServiceNode{
@@ -708,7 +754,23 @@ func serviceRef(ref gwapiv1.BackendObjectReference, routeNS string) (types.Names
 // proxyReplicas returns the summed ready/desired replica counts across the
 // Gateway's proxy Deployment(s), whether any proxy Deployment exists, and
 // whether all are scaled to zero (Beacon's ground-truth "withdrawn" signal).
+type proxyReplicaResult struct {
+	ready, desired int32
+	found, allZero bool
+}
+
 func (b *Builder) proxyReplicas(ctx context.Context, gw *gwapiv1.Gateway) (ready, desired int32, found, allZero bool) {
+	cacheKey := "proxyreplicas/" + gw.Namespace + "/" + gw.Name
+	if v, ok := b.Cache.Get(cacheKey); ok {
+		r, _ := v.(proxyReplicaResult)
+		return r.ready, r.desired, r.found, r.allZero
+	}
+	ready, desired, found, allZero = b.proxyReplicasLive(ctx, gw)
+	b.Cache.Set(cacheKey, proxyReplicaResult{ready, desired, found, allZero})
+	return ready, desired, found, allZero
+}
+
+func (b *Builder) proxyReplicasLive(ctx context.Context, gw *gwapiv1.Gateway) (ready, desired int32, found, allZero bool) {
 	list := &appsv1.DeploymentList{}
 	if err := b.Client.List(ctx, list,
 		client.InNamespace(gw.Namespace),
@@ -734,6 +796,17 @@ func (b *Builder) proxyReplicas(ctx context.Context, gw *gwapiv1.Gateway) (ready
 }
 
 func (b *Builder) findProxyService(ctx context.Context, gw *gwapiv1.Gateway) *corev1.Service {
+	cacheKey := "proxysvc/" + gw.Namespace + "/" + gw.Name
+	if v, ok := b.Cache.Get(cacheKey); ok {
+		svc, _ := v.(*corev1.Service)
+		return svc
+	}
+	svc := b.findProxyServiceLive(ctx, gw)
+	b.Cache.Set(cacheKey, svc)
+	return svc
+}
+
+func (b *Builder) findProxyServiceLive(ctx context.Context, gw *gwapiv1.Gateway) *corev1.Service {
 	labeled := &corev1.ServiceList{}
 	if err := b.Client.List(ctx, labeled,
 		client.InNamespace(gw.Namespace),
@@ -770,17 +843,59 @@ func (b *Builder) findProxyService(ctx context.Context, gw *gwapiv1.Gateway) *co
 	return nil
 }
 
-func (b *Builder) podsForService(ctx context.Context, svc *corev1.Service) []corev1.Pod {
-	sliceList := &discoveryv1.EndpointSliceList{}
-	if err := b.Client.List(ctx, sliceList,
-		client.InNamespace(svc.Namespace),
-		client.MatchingLabels{discoveryv1.LabelServiceName: svc.Name},
-	); err != nil {
+// getService fetches a single Service by name, short-circuiting via Cache
+// (including caching "not found" as a nil result) so repeated dashboard polls
+// don't re-issue the same live Get for backends that haven't changed.
+func (b *Builder) getService(ctx context.Context, key types.NamespacedName) *corev1.Service {
+	cacheKey := "svc/" + key.Namespace + "/" + key.Name
+	if v, ok := b.Cache.Get(cacheKey); ok {
+		svc, _ := v.(*corev1.Service)
+		return svc
+	}
+	svc := &corev1.Service{}
+	if err := b.Client.Get(ctx, key, svc); err != nil {
+		b.Cache.Set(cacheKey, (*corev1.Service)(nil))
 		return nil
 	}
+	b.Cache.Set(cacheKey, svc)
+	return svc
+}
+
+// getPod fetches a single Pod by name, same caching rationale as getService.
+func (b *Builder) getPod(ctx context.Context, ref types.NamespacedName) *corev1.Pod {
+	cacheKey := "pod/" + ref.Namespace + "/" + ref.Name
+	if v, ok := b.Cache.Get(cacheKey); ok {
+		pod, _ := v.(*corev1.Pod)
+		return pod
+	}
+	pod := &corev1.Pod{}
+	if err := b.Client.Get(ctx, ref, pod); err != nil {
+		b.Cache.Set(cacheKey, (*corev1.Pod)(nil))
+		return nil
+	}
+	b.Cache.Set(cacheKey, pod)
+	return pod
+}
+
+func (b *Builder) podsForService(ctx context.Context, svc *corev1.Service) []corev1.Pod {
+	epsCacheKey := "eps/" + svc.Namespace + "/" + svc.Name
+	var sliceItems []discoveryv1.EndpointSlice
+	if v, ok := b.Cache.Get(epsCacheKey); ok {
+		sliceItems, _ = v.([]discoveryv1.EndpointSlice)
+	} else {
+		sliceList := &discoveryv1.EndpointSliceList{}
+		if err := b.Client.List(ctx, sliceList,
+			client.InNamespace(svc.Namespace),
+			client.MatchingLabels{discoveryv1.LabelServiceName: svc.Name},
+		); err != nil {
+			return nil
+		}
+		sliceItems = sliceList.Items
+		b.Cache.Set(epsCacheKey, sliceItems)
+	}
 	podRefs := map[types.NamespacedName]struct{}{}
-	for i := range sliceList.Items {
-		for _, ep := range sliceList.Items[i].Endpoints {
+	for i := range sliceItems {
+		for _, ep := range sliceItems[i].Endpoints {
 			if ep.TargetRef == nil || ep.TargetRef.Kind != "Pod" {
 				continue
 			}
@@ -802,8 +917,8 @@ func (b *Builder) podsForService(ctx context.Context, svc *corev1.Service) []cor
 	}
 	var pods []corev1.Pod
 	for ref := range podRefs {
-		pod := &corev1.Pod{}
-		if err := b.Client.Get(ctx, ref, pod); err != nil {
+		pod := b.getPod(ctx, ref)
+		if pod == nil {
 			continue
 		}
 		pods = append(pods, *pod)
