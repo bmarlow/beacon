@@ -10,6 +10,7 @@
   const legendEl = document.getElementById("legend");
   const filterInfoEl = document.getElementById("filterInfo");
   const clearFilterBtn = document.getElementById("clearFilterBtn");
+  const remoteFilterBtn = document.getElementById("remoteFilterBtn");
   const statusChips = Array.prototype.slice.call(
     document.querySelectorAll(".chip[data-status]")
   );
@@ -25,10 +26,34 @@
   // `collapsed`.
   let statusFilter = new Set();
 
+  // remoteOnly, when true, restricts the tree to VIPs/Gateways/Routes/
+  // Services that have a remote (Skupper-linked) backend somewhere beneath
+  // them, plus the remote leaf itself. This is an orthogonal axis from
+  // statusFilter (backend locality, not health) and composes with it: both
+  // must be satisfied for a node to show. Persists across auto-refreshes.
+  let remoteOnly = false;
+
   // statusVisible reports whether a node with the given status should be
-  // shown given the current filter (no filter => everything visible).
+  // shown given the current status filter (no filter => everything visible).
   function statusVisible(status) {
     return statusFilter.size === 0 || statusFilter.has(status || "Unknown");
+  }
+
+  // remoteVisible reports whether a node should be shown given the current
+  // remote-only filter. isRemote is true only for an actual Skupper-linked
+  // Service or its synthetic remote Pod leaf -- Pools/IPs/Gateways/Routes
+  // have no intrinsic "remote" property of their own, so they always pass
+  // false here and rely on a surviving remote descendant to stay visible
+  // (see ownMatches / the shared "keep if self matches or a child survives"
+  // pattern used by every *Node builder below).
+  function remoteVisible(isRemote) {
+    return !remoteOnly || isRemote;
+  }
+
+  // ownMatches combines both filters for a single node's own (non-child)
+  // properties.
+  function ownMatches(status, isRemote) {
+    return statusVisible(status) && remoteVisible(isRemote);
   }
 
   // consoleURL builds an OpenShift console URL for a resource ref, or "" if a
@@ -182,7 +207,7 @@
   }
 
   function podNode(p) {
-    if (!statusVisible(p.status)) return null;
+    if (!ownMatches(p.status, p.remote === true)) return null;
     const meta = [p.phase];
     if (p.node) meta.push("@" + p.node);
     if (p.remote) {
@@ -209,7 +234,7 @@
     const kids = (s.pods || []).map(podNode).filter(Boolean);
     // Hide this Service entirely when a filter is active, none of its pods
     // matched, and the Service's own status doesn't match either.
-    if (!statusVisible(s.status) && kids.length === 0) return null;
+    if (!ownMatches(s.status, !!s.skupper) && kids.length === 0) return null;
     let meta;
     if (s.skupper) {
       meta =
@@ -258,7 +283,7 @@
 
   function routeNode(r) {
     const kids = (r.services || []).map(serviceNode).filter(Boolean);
-    if (!statusVisible(r.status) && kids.length === 0) return null;
+    if (!ownMatches(r.status, false) && kids.length === 0) return null;
     let meta = "";
     if (r.hostnames && r.hostnames.length) meta = r.hostnames.join(", ");
     return nodeRow({
@@ -276,7 +301,7 @@
 
   function gatewayNode(g) {
     const kids = (g.routes || []).map(routeNode).filter(Boolean);
-    if (!statusVisible(g.status) && kids.length === 0) return null;
+    if (!ownMatches(g.status, false) && kids.length === 0) return null;
     const meta = [];
     if (g.className) meta.push("class=" + g.className);
     if (g.exempt) meta.push("exempt");
@@ -319,7 +344,7 @@
 
   function ipNode(ip) {
     const kids = (ip.gateways || []).map(gatewayNode).filter(Boolean);
-    if (!statusVisible(ip.status) && kids.length === 0) return null;
+    if (!ownMatches(ip.status, false) && kids.length === 0) return null;
     return nodeRow({
       id: "ip/" + ip.ip,
       kind: "VIP",
@@ -335,7 +360,7 @@
 
   function poolNode(p) {
     const kids = (p.ips || []).map(ipNode).filter(Boolean);
-    if (!statusVisible(p.status) && kids.length === 0) return null;
+    if (!ownMatches(p.status, false) && kids.length === 0) return null;
     const meta = [(p.addresses || []).join(", ")];
     if (p.restricted) meta.push("\u{1F512} restricted");
     return nodeRow({
@@ -394,9 +419,23 @@
     return counts;
   }
 
-  // updateLegendUI reflects the current statusFilter onto the legend chips
-  // (active/inactive styling, aria-pressed, live counts) and the "Clear
-  // filter" control.
+  // countRemote walks the *unfiltered* graph and counts remote (Skupper-
+  // linked) backend Services, for the Remote toggle's live count.
+  function countRemote(graph) {
+    let n = 0;
+    function walkService(s) { if (s.skupper) n++; }
+    function walkRoute(r) { (r.services || []).forEach(walkService); }
+    function walkGateway(g) { (g.routes || []).forEach(walkRoute); }
+    function walkIP(ip) { (ip.gateways || []).forEach(walkGateway); }
+    function walkPool(p) { (p.ips || []).forEach(walkIP); }
+    (graph.pools || []).forEach(walkPool);
+    (graph.unpooledGateways || []).forEach(walkGateway);
+    return n;
+  }
+
+  // updateLegendUI reflects the current statusFilter/remoteOnly onto the
+  // legend chips (active/inactive styling, aria-pressed, live counts) and
+  // the "Clear filter" control.
   function updateLegendUI() {
     const counts = lastGraph ? countStatuses(lastGraph) : {};
     statusChips.forEach((chip) => {
@@ -406,11 +445,20 @@
       chip.textContent =
         chip.dataset.label + " (" + (counts[chip.dataset.status] || 0) + ")";
     });
-    legendEl.classList.toggle("filtering", statusFilter.size > 0);
-    if (statusFilter.size > 0) {
+
+    const remoteCount = lastGraph ? countRemote(lastGraph) : 0;
+    remoteFilterBtn.classList.toggle("active", remoteOnly);
+    remoteFilterBtn.setAttribute("aria-pressed", remoteOnly ? "true" : "false");
+    remoteFilterBtn.textContent = "Remote (" + remoteCount + ")";
+
+    const filterActive = statusFilter.size > 0 || remoteOnly;
+    legendEl.classList.toggle("filtering", filterActive);
+    if (filterActive) {
+      const parts = [];
+      if (statusFilter.size > 0) parts.push(Array.from(statusFilter).join(", "));
+      if (remoteOnly) parts.push("Remote");
       clearFilterBtn.style.display = "";
-      filterInfoEl.textContent =
-        "Showing only: " + Array.from(statusFilter).join(", ");
+      filterInfoEl.textContent = "Showing only: " + parts.join(" \u00b7 ");
     } else {
       clearFilterBtn.style.display = "none";
       filterInfoEl.textContent = "";
@@ -426,15 +474,22 @@
     render(lastGraph);
   }
 
+  function toggleRemoteFilter() {
+    remoteOnly = !remoteOnly;
+    render(lastGraph);
+  }
+
   function clearStatusFilter() {
-    if (statusFilter.size === 0) return;
+    if (statusFilter.size === 0 && !remoteOnly) return;
     statusFilter.clear();
+    remoteOnly = false;
     render(lastGraph);
   }
 
   statusChips.forEach((chip) => {
     chip.addEventListener("click", () => toggleStatusFilter(chip.dataset.status));
   });
+  remoteFilterBtn.addEventListener("click", toggleRemoteFilter);
   clearFilterBtn.addEventListener("click", clearStatusFilter);
 
   let lastGraph = null;
@@ -468,7 +523,7 @@
       treeEl.appendChild(el("div", "loading", "No MetalLB pools or gateways found."));
     } else if (poolNodes.length === 0 && unpooledNodes.length === 0) {
       treeEl.appendChild(
-        el("div", "loading", "No items match the selected status filter.")
+        el("div", "loading", "No items match the selected filters.")
       );
     }
 

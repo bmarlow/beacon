@@ -443,21 +443,42 @@ console-linked name, optional inline tags (e.g. `CRITICAL`), metadata, a
 
 ### Click-to-filter
 
-The status legend doubles as a multi-select filter (added after the initial
-build; see the "click-to-filter" feature). Clicking one or more chips
+The status legend doubles as a multi-select filter. Clicking one or more chips
 (`data-status="Unhealthy"`, etc.) toggles membership in a client-side
 `statusFilter` `Set`; `render(lastGraph)` is re-run with no re-fetch. A node is
 kept if **its own status matches the filter, or any descendant does** — so
 filtering to `Unhealthy` still shows the Gateway/Service context around a
-failing Pod, rather than an orphaned flat list:
+failing Pod, rather than an orphaned flat list.
+
+A second, independent toggle — **Remote** — sits next to the status chips.
+Where `statusFilter` is a multi-value set along one axis (health), `remoteOnly`
+is a single boolean along an orthogonal axis (backend locality): is this
+Service Skupper-linked (see [Skupper-linked (remote)
+backends](HEALTH.md#skupper-linked-remote-backends))? Pools/IPs/Gateways/Routes
+have no intrinsic "remote" property of their own — they only pass the filter
+by having a surviving remote descendant, exactly like the ancestor-visibility
+rule for statuses. Both filters compose (AND) via one shared helper:
 
 ```js
+function remoteVisible(isRemote) {
+  return !remoteOnly || isRemote;
+}
+function ownMatches(status, isRemote) {
+  return statusVisible(status) && remoteVisible(isRemote);
+}
+
 function serviceNode(s) {
   const kids = (s.pods || []).map(podNode).filter(Boolean);
-  if (!statusVisible(s.status) && kids.length === 0) return null; // pruned
+  if (!ownMatches(s.status, !!s.skupper) && kids.length === 0) return null; // pruned
   ...
 }
 ```
+
+Every `*Node` builder passes its own `isRemote` value into `ownMatches`:
+`true` only for a Skupper-linked `ServiceNode` (`!!s.skupper`) or its synthetic
+remote `PodNode` (`p.remote === true`); `false` for every other node kind,
+which relies entirely on a surviving child to stay visible when `remoteOnly`
+is on.
 
 This filtering, plus collapse/expand state (`collapsed[id]`, keyed by a stable
 per-node id like `"pod/<ns>/<name>"`), is recomputed on **every** render —

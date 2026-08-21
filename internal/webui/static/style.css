@@ -208,6 +208,19 @@ body {
 }
 .chip-clear { font-size: 12px; padding: 2px 8px; }
 
+/* Vertical divider separating the status filters from the orthogonal
+   "Remote" filter (a different axis: backend locality, not health). */
+.legend-sep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--border-strong);
+  margin: 0 2px;
+}
+/* Deliberately not a status color (there's no "remote" status) — a distinct
+   neutral chip so it reads as a different kind of filter from the 7 status
+   chips it sits next to. */
+.chip-remote { background: var(--rh-gray-80); }
+
 /* ---------------- Tree ---------------- */
 .tree { padding: var(--sp-md) var(--sp-lg) 64px; }
 .loading { color: var(--text-secondary); padding: 48px; text-align: center; }

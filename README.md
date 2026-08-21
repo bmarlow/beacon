@@ -730,6 +730,11 @@ Highlights:
   to). Each chip shows a live count; click an active chip again, or **Clear
   filter**, to reset. The filter is applied entirely client-side and persists
   across auto-refreshes.
+- A separate **Remote** toggle next to the status chips narrows the tree to
+  only VIPs/Gateways/Routes/Services with a
+  [remote (Skupper-linked)](#skupper-linked-remote-backends) backend — useful
+  on a cluster with a mix of local and remote backends. It composes with the
+  status filter (both must match) and also resets via **Clear filter**.
 - Every component name is a **clickable link to its OpenShift console page**
   (opens in a new tab) when you have access to that object.
 - Each node shows **how long it has been in its current status** (e.g. `for
